@@ -138,7 +138,7 @@ export default function ExamPage() {
 
   // ✅ مراقبة الغش بالخروج من التبويب أو فقدان التركيز
   useEffect(() => {
-    if (!exam || !user) return;
+    if (!exam || !user || !examStarted || examSubmitted) return;
     const handlerVisibility = () => {
       if (document.visibilityState === 'hidden') {
         alert(language === 'ar' ? 'تحذير: غادرت صفحة الامتحان' : 'Warning: You left the exam page');
@@ -173,7 +173,7 @@ export default function ExamPage() {
       document.removeEventListener('visibilitychange', handlerVisibility);
       window.removeEventListener('blur', handlerBlur);
     };
-  }, [exam, user, language]);
+  }, [exam, user, language, examStarted, examSubmitted]);
 
   // ✅ تحذير قبل الإغلاق/التحديث
   useEffect(() => {
@@ -338,11 +338,12 @@ questions: exam.questions.map((q: any, idx: number) => ({
   type: q.type || 'multiple-choice'
 })),
         
-        // ✅ إجابات الطالب كـ مصفوفة أرقام
+        // ✅ إجابات الطالب: غير المجابة تُرسل كـ null
         answers: studentAnswers.map(a => {
-          if (a === undefined || a === null) return -1;
+          if (a === undefined) return null as any;
+          if (a === null) return null as any;
           const num = typeof a === 'string' ? parseInt(a) : Number(a);
-          return isNaN(num) ? -1 : num;
+          return isNaN(num) ? null as any : num;
         }),
         
         essayAnswers: essayAnswers.filter(a => a?.trim()),

@@ -59,7 +59,10 @@ export default function AdminResultReviewPage() {
       const isAutoCorrect = type !== 'essay' && typeof studentAns === 'number' && studentAns === correctIndex;
       const ov = overrides[rq.id];
       const currentIsCorrect = ov?.isCorrect ?? isAutoCorrect;
-      return { idx, id: rq.id, question: eq.text?.ar || rq.question, studentText, correctText, points, type, isAutoCorrect, currentIsCorrect };
+      const modelAnswerText = type === 'essay'
+        ? ((eq.modelAnswer?.ar || eq.modelAnswer?.en) ?? '')
+        : correctText;
+      return { idx, id: rq.id, question: eq.text?.ar || rq.question, studentText, correctText, modelAnswerText, points, type, isAutoCorrect, currentIsCorrect };
     });
   }, [data, overrides]);
 
@@ -146,7 +149,7 @@ export default function AdminResultReviewPage() {
                 <div className="flex-1">
                   <div className="font-semibold mb-1">Q{item.idx + 1}. {item.question}</div>
                   <div className="text-sm">Student: {item.studentText || '-'}</div>
-                  {item.correctText && <div className="text-sm text-green-700">Correct: {item.correctText}</div>}
+                  {item.modelAnswerText && <div className="text-sm text-green-700">Model Answer: {item.modelAnswerText}</div>}
                   <div className="text-xs mt-1">Type: {item.type} • Points: {item.points}</div>
                 </div>
                 <div className="w-64">
