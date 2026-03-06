@@ -101,24 +101,24 @@ router.get('/:id', adminAuth, async (req, res) => {
       };
     }) || [];
 
+    const s = (exam as any).settings || {};
     const processedExam = {
       ...exam,
       questions: processedQuestions,
       settings: {
-  duration: { type: Number, required: true, default: 30 },
-  totalPoints: { type: Number, required: true, default: 100 },
-  passingScore: { type: Number, default: 50 },
-  shuffleQuestions: { type: Boolean, default: false },
-  shuffleOptions: { type: Boolean, default: true },
-  showResults: { type: String, enum: ['immediate', 'after-publish', 'never'], default: 'after-publish' },
-  allowReview: { type: Boolean, default: true },
-  // ✅ أضف هذه الخصائص الثلاثة هنا مع قيم افتراضية:
-  allowBackNavigation: { type: Boolean, default: true },
-  timePerQuestion: { type: Boolean, default: false },
-  timePerQuestionSeconds: { type: Number, default: 60 },
-  startDate: Date,
-  endDate: Date
-},
+        duration: s.duration ?? 30,
+        totalPoints: s.totalPoints ?? 100,
+        passingScore: s.passingScore ?? 50,
+        shuffleQuestions: s.shuffleQuestions ?? false,
+        shuffleOptions: s.shuffleOptions ?? true,
+        showResults: s.showResults ?? 'after-publish',
+        allowReview: s.allowReview ?? true,
+        allowBackNavigation: true,
+        timePerQuestion: false,
+        timePerQuestionSeconds: 60,
+        startDate: s.startDate,
+        endDate: s.endDate
+      }
     };
     
     res.json({ success: true, data: processedExam });
@@ -528,7 +528,7 @@ router.post('/grade-essay', adminAuth, async (req, res) => {
     const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
     const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
 
-    // ✅ 4. تحسين الـ prompt للتحقق من جودة الإجابة - مع تضمين الإجابة النموذجية من قاعدة البيانات
+    // ✅ 4. تحسين الـ prompt للتحقق من جودة الإجابة - صارم جداً ويقارن بالإجابة النموذجية
     const prompt = `
 أنت مصحح امتحانات صارم وعادل. قم بتحليل الإجابة الإنشائية التالية بدقة:
 
@@ -545,12 +545,19 @@ router.post('/grade-essay', adminAuth, async (req, res) => {
 ${studentAnswer.trim()}
 """
 
-⚠️ معايير التصحيح الصارمة:
-1. إذا كانت الإجابة قصيرة جداً (أقل من 20 كلمة) ← الدرجة القصوى 30% من ${points}
-2. إذا لم تحتوي على أي من الكلمات المفتاحية ← خصم 50% من الدرجة
-3. إذا كانت الإجابة غير ذات صلة بالسؤال ← الدرجة 0
-4. إذا كانت الإجابة نسخاً حرفياً من السؤال ← الدرجة 0
-5. كن صارماً في تقييم صحة المعلومات
+⚠️ معايير التصحيح الصارمة جداً:
+1) التطابق الدلالي مع الإجابة النموذجية شرط أساسي. إذا غابت النقاط الجوهرية في الإجابة النموذجية، الدرجة = 0.
+2) الكلمات المفتاحية مطلوبة: 
+   - لا كلمات مفتاحية مطابقة ⇒ الدرجة = 0.
+   - كلمات مفتاحية قليلة ⇒ خصم كبير (≥70%) حسب أهميتها.
+3) إجابة غير ذات صلة أو هراء أو حشو أو مخالفة للسؤال ⇒ الدرجة = 0.
+4) نسخ السؤال أو جمل عامة بدون مضمون ⇒ الدرجة = 0.
+5) الطول:
+   - أقل من 20 كلمة ⇒ حد أقصى 20% من ${points}.
+6) المحتوى:
+   - أخطاء علمية جوهرية ⇒ الدرجة = 0.
+7) التجانس:
+   - إن كانت الإجابة جزئية لكنها صحيحة وتشمل بعض النقاط الأساسية والكلمات المفتاحية ⇒ امنح درجة جزئية متناسبة.
 
 أجب بصيغة JSON فقط (بدون أي نص قبل أو بعد):
 {

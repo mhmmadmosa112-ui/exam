@@ -1,9 +1,37 @@
 import { Router, Request, Response } from 'express';
 import { Exam } from '../models/Exam';
 import { ExamResult } from '../models/ExamResult';
+import { Subject } from '../models/Subject';
 import { adminAuth } from '../middleware/adminAuth';
 
 const router = Router();
+
+// ✅ 0. إحصائيات عامة - يجب أن يكون هذا في الأعلى لمنع التعارض مع المسارات الأخرى
+router.get('/stats', adminAuth, async (req: Request, res: Response) => {
+  try {
+    const [totalExams, totalSubjects, totalResults, byTopic] = await Promise.all([
+      Exam.countDocuments({}),
+      Subject.countDocuments({ isActive: true }),
+      ExamResult.countDocuments({}),
+      ExamResult.aggregate([
+        {
+          $group: {
+            _id: '$examTopic',
+            count: { $sum: 1 },
+            avgScore: { $avg: '$score' }
+          }
+        },
+        { $sort: { count: -1 } }
+      ])
+    ]);
+    res.json({
+      success: true,
+      data: { totalExams, totalSubjects, totalResults, byTopic }
+    });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error.message || 'Failed to load stats' });
+  }
+});
 
 // ✅ 1. جلب الإحصائيات العامة
 // 2. جلب امتحان واحد للتعديل - مسار محدد لتفادي التعارض مع /results

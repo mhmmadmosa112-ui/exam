@@ -109,7 +109,17 @@ export default function ExamPage() {
           setEssayAnswers(new Array(qCount).fill(undefined));
         } else {
           if ((data.error || '').toLowerCase().includes('already submitted')) {
-            alert(language === 'ar' ? 'لقد قمت بتسليم هذا الامتحان مسبقاً' : 'You have already submitted this exam');
+            const req = confirm(language === 'ar'
+              ? 'لقد قمت بتسليم هذا الامتحان مسبقاً. هل تريد طلب إعادة محاولة؟'
+              : 'You already submitted this exam. Request retake?');
+            if (req) {
+              await fetch('http://localhost:3001/api/student-exams/retake-request', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'x-user-email': user.email!, 'x-user-id': user.uid },
+                body: JSON.stringify({ examId, userId: user.uid })
+              });
+              alert(language === 'ar' ? 'تم إرسال طلب إعادة المحاولة' : 'Retake request sent');
+            }
             router.push('/dashboard');
             return;
           }

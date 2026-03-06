@@ -5,6 +5,7 @@ const express_1 = require("express");
 const adminAuth_1 = require("../middleware/adminAuth");
 const ExamResult_1 = require("../models/ExamResult");
 const BlockedUser_1 = require("../models/BlockedUser");
+const RetakeRequest_1 = require("../models/RetakeRequest");
 const router = (0, express_1.Router)();
 exports.adminStudentsRoutes = router;
 router.use(adminAuth_1.adminAuth);
@@ -26,6 +27,25 @@ router.get('/', async (req, res) => {
         blocked: blockedSet.has(`${r._id.userId}|${r._id.userEmail}`)
     }));
     res.json({ success: true, data });
+});
+// ✅ طلبات إعادة المحاولة
+router.get('/retake-requests', async (req, res) => {
+    const ctx = req.admin;
+    if (ctx.role !== 'super')
+        return res.status(403).json({ success: false, error: 'غير مصرح' });
+    const rows = await RetakeRequest_1.RetakeRequest.find({ status: 'pending' }).sort({ createdAt: -1 }).lean();
+    res.json({ success: true, data: rows });
+});
+router.post('/retake-approve', async (req, res) => {
+    const ctx = req.admin;
+    if (ctx.role !== 'super')
+        return res.status(403).json({ success: false, error: 'غير مصرح' });
+    const { examId, userEmail, userId } = req.body;
+    if (!examId || !userEmail || !userId)
+        return res.status(400).json({ success: false, error: 'بيانات ناقصة' });
+    await ExamResult_1.ExamResult.deleteMany({ examId: String(examId), userEmail });
+    await RetakeRequest_1.RetakeRequest.findOneAndUpdate({ examId: String(examId), userId: String(userId) }, { $set: { status: 'approved' } });
+    res.json({ success: true });
 });
 router.post('/block', async (req, res) => {
     const ctx = req.admin;

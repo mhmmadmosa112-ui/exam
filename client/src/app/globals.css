@@ -2,8 +2,20 @@
 
 /* ✅ تعريف المتغيرات فقط - لا تستخدم @apply هنا */
 :root {
+  /* Legacy */
   --background: #ffffff;
-  --foreground: #111827; /* gray-900 ← نصوص غامقة */
+  --foreground: #111827;
+  /* Theme (controlled from Settings) */
+  --dashboard-bg: #ffffff;
+  --dashboard-text: #000000;
+  --dashboard-primary: #4f46e5;
+  --dashboard-sidebar: #0f172a;
+  /* Typography */
+  --font-size-header: 18px;
+  --font-size-body: 14px;
+  --font-size-input: 14px;
+  --font-weight: 700; /* bold */
+  --font-family: Arial, Helvetica, sans-serif;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -15,10 +27,39 @@
 
 /* ✅ تطبيق الألوان الأساسية على body فقط */
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--dashboard-bg);
+  color: var(--dashboard-text);
+  font-family: var(--font-family);
+  font-size: var(--font-size-body);
+  font-weight: var(--font-weight);
 }
 
 /* ✅ لا تستخدم @apply في globals.css مع Tailwind v4 + Turbopack */
 /* بدلاً من ذلك، استخدم كلاسات Tailwind مباشرة في المكونات (.tsx/.jsx) */
+
+/* Typography mappings */
+h1, h2, h3, h4, h5, h6 {
+  color: var(--dashboard-text);
+  font-weight: var(--font-weight);
+  font-family: var(--font-family);
+}
+h1 { font-size: calc(var(--font-size-header) * 1.6); }
+h2 { font-size: calc(var(--font-size-header) * 1.4); }
+h3 { font-size: calc(var(--font-size-header) * 1.2); }
+h4, h5, h6 { font-size: var(--font-size-header); }
+
+/* Inputs */
+input, select, textarea, button {
+  color: var(--dashboard-text);
+  font-family: var(--font-family);
+}
+input, select, textarea {
+  font-size: var(--font-size-input);
+  font-weight: var(--font-weight);
+}
+
+/* Primary accents utility (can be referenced in components inline styles) */
+:root {
+  --color-primary: var(--dashboard-primary);
+  --color-sidebar: var(--dashboard-sidebar);
+} 

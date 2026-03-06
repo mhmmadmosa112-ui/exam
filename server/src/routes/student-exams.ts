@@ -309,6 +309,26 @@ router.post('/cheat-log', studentAuth, async (req, res) => {
   }
 });
 
+// ✅ طلب إتاحة إعادة المحاولة
+router.post('/retake-request', studentAuth, async (req, res) => {
+  try {
+    const { examId, userId, reason } = req.body;
+    const userEmail = req.headers['x-user-email'] as string;
+    if (!examId || !userId) {
+      return res.status(400).json({ success: false, error: 'examId,userId مطلوبة' });
+    }
+    const { RetakeRequest } = await import('../models/RetakeRequest');
+    const doc = await RetakeRequest.findOneAndUpdate(
+      { examId: String(examId), userId: String(userId) },
+      { $set: { userEmail, status: 'pending', reason: reason || '' } },
+      { upsert: true, new: true }
+    ).lean();
+    res.json({ success: true, data: doc });
+  } catch (e: any) {
+    res.status(500).json({ success: false, error: e.message || 'فشل إنشاء الطلب' });
+  }
+});
+
 // ✅ أضف هذا في نهاية الملف قبل export
 // جلب سجل امتحانات طالب معين
 router.get('/history/:userId', async (req, res) => {

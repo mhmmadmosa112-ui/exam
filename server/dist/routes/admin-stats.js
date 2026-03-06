@@ -4,9 +4,37 @@ exports.adminStatsRoutes = void 0;
 const express_1 = require("express");
 const Exam_1 = require("../models/Exam");
 const ExamResult_1 = require("../models/ExamResult");
+const Subject_1 = require("../models/Subject");
 const adminAuth_1 = require("../middleware/adminAuth");
 const router = (0, express_1.Router)();
 exports.adminStatsRoutes = router;
+// ✅ 0. إحصائيات عامة - يجب أن يكون هذا في الأعلى لمنع التعارض مع المسارات الأخرى
+router.get('/stats', adminAuth_1.adminAuth, async (req, res) => {
+    try {
+        const [totalExams, totalSubjects, totalResults, byTopic] = await Promise.all([
+            Exam_1.Exam.countDocuments({}),
+            Subject_1.Subject.countDocuments({ isActive: true }),
+            ExamResult_1.ExamResult.countDocuments({}),
+            ExamResult_1.ExamResult.aggregate([
+                {
+                    $group: {
+                        _id: '$examTopic',
+                        count: { $sum: 1 },
+                        avgScore: { $avg: '$score' }
+                    }
+                },
+                { $sort: { count: -1 } }
+            ])
+        ]);
+        res.json({
+            success: true,
+            data: { totalExams, totalSubjects, totalResults, byTopic }
+        });
+    }
+    catch (error) {
+        res.status(500).json({ success: false, error: error.message || 'Failed to load stats' });
+    }
+});
 // ✅ 1. جلب الإحصائيات العامة
 // 2. جلب امتحان واحد للتعديل - مسار محدد لتفادي التعارض مع /results
 router.get('/exams/:id', adminAuth_1.adminAuth, async (req, res) => {
