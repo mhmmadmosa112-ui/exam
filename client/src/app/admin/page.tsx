@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import LiveGrid from './LiveGrid';
 import ExamCommander from '../../components/admin/ExamCommander';
+import { io } from 'socket.io-client';
 
 // ========== Interfaces ==========
 interface ExamResult {
@@ -175,6 +176,22 @@ export default function AdminPage() {
   }, [user]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
+
+  // ========== Real-time Session Updates ==========
+  useEffect(() => {
+    if (!user?.email) return;
+    
+    const socket = io('http://localhost:3001/monitoring');
+    socket.on('connect', () => {
+      socket.emit('admin-join', { adminId: user.email });
+    });
+
+    socket.on('active-sessions-update', () => {
+      fetchData(); // Refresh data when session counts change
+    });
+
+    return () => { socket.disconnect(); };
+  }, [user, fetchData]);
 
   // Load theme from localStorage on mount
   useEffect(() => {

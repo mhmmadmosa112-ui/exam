@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { auth } from '@/lib/firebase';
 import { useAuthState } from 'react-firebase-hooks/auth';
 import { useLanguage } from '@/context/LanguageContext';
-import { Clock, ChevronLeft, ChevronRight, CheckCircle, Award, AlertCircle, Loader2 } from 'lucide-react';
+import { Clock, ChevronLeft, ChevronRight, CheckCircle, Award, AlertCircle, Loader2, Lock } from 'lucide-react';
 import Header from '@/components/Header';
 import { io, Socket } from 'socket.io-client';
 import Peer from 'simple-peer';
@@ -86,6 +86,7 @@ function ExamPageContent() {
   const [loadingExam, setLoadingExam] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
+  const [isLocked, setIsLocked] = useState(false);
 
   // ✅ State for Conditional Groups
   const [groupAnswerStatus, setGroupAnswerStatus] = useState<Record<string, { answeredIds: Set<string> }>>({});
@@ -207,6 +208,8 @@ function ExamPageContent() {
   // ✅ مراقبة الغش بالخروج من التبويب أو فقدان التركيز
   useEffect(() => {
     if (!exam || !user || !examStarted || examSubmitted || submitting) return;
+    
+    // Bypass if camera is initializing or exam hasn't fully started logic
     const handlerVisibility = () => {
       if (document.visibilityState === 'hidden') {
         alert(language === 'ar' ? 'تحذير: غادرت صفحة الامتحان' : 'Warning: You left the exam page');
@@ -223,6 +226,8 @@ function ExamPageContent() {
       }
     };
     const handlerBlur = () => {
+      // Skip if just starting (e.g. browser permission dialogs)
+      if (!examStarted) return; 
       alert(language === 'ar' ? 'تحذير: نافذة الامتحان فقدت التركيز' : 'Warning: Exam window lost focus');
       fetch('http://localhost:3001/api/student-exams/cheat-log', {
         method: 'POST',
@@ -254,6 +259,26 @@ function ExamPageContent() {
     window.addEventListener('beforeunload', beforeUnload);
     return () => window.removeEventListener('beforeunload', beforeUnload);
   }, [examStarted, examSubmitted]);
+
+  // ✅ Anti-Tamper Enforcement
+  const handleStreamTampering = useCallback(() => {
+    setIsLocked(true);
+    if (socket && user) {
+      socket.emit('student-tampered-with-stream', { 
+        studentId: user.email, 
+        examId: exam?._id 
+      });
+    }
+  }, [socket, user, exam]);
+
+  const monitorTrack = useCallback((track: MediaStreamTrack) => {
+    track.onended = () => {
+      console.warn('Stream track ended unexpectedly');
+      handleStreamTampering();
+    };
+    // Also listen for inactive state if browser supports it differently
+    // track.onmute = ... could be added but might be too sensitive for network blips
+  }, [handleStreamTampering]);
 
   const startScreenshotFallback = useCallback((camStream: MediaStream, screenStream: MediaStream, sock: Socket, fromId: string) => {
     if (fallbackIntervalRef.current) clearInterval(fallbackIntervalRef.current);
@@ -287,8 +312,23 @@ function ExamPageContent() {
       
       // Phase 2: Automated Capture & Streaming
       try {
-        const cameraStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-        const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+        // Simultaneous Capture
+        const [cameraStream, screenStream] = await Promise.all([
+          navigator.mediaDevices.getUserMedia({ video: true, audio: true }),
+          navigator.mediaDevices.getDisplayMedia({ video: true })
+        ]);
+
+        // Audio Injection: Add mic audio to screen stream if missing
+        const audioTrack = cameraStream.getAudioTracks()[0];
+        if (audioTrack) {
+           // Clone to avoid track ending issues if one stream stops
+           screenStream.addTrack(audioTrack.clone());
+        }
+
+        // Active Monitoring
+        cameraStream.getTracks().forEach(monitorTrack);
+        screenStream.getTracks().forEach(monitorTrack);
+        if (audioTrack) monitorTrack(audioTrack);
 
         // Reuse the socket from the hook if available, otherwise create new (though hook creates one)
         // Ideally we use the one from useExamSocket, but for WebRTC we might need the specific instance logic
@@ -300,7 +340,7 @@ function ExamPageContent() {
 
         newSocket.on('connect', () => {
             console.log('[Socket.IO] Student connected:', newSocket.id);
-            newSocket.emit('student-join', { studentId: user.email!, examId: exam._id });
+            newSocket.emit('join-exam', { studentId: user.email!, examId: exam._id });
         });
 
         // Listen for an offer from a specific admin
@@ -344,7 +384,7 @@ function ExamPageContent() {
         setExamStarted(false); // Revert start
       }
     }
-  }, [examStarted, exam, user, startScreenshotFallback]);
+  }, [examStarted, exam, user, startScreenshotFallback, commanderSocket, monitorTrack]);
 
   // ✅ مؤقت الامتحان الرئيسي - مصحح
   useEffect(() => {
@@ -605,6 +645,43 @@ function ExamPageContent() {
     return text?.[language] || text?.ar || '';
   }, [language]);
 
+  // ✅ FIX: Move Hooks and derived state BEFORE any conditional returns
+  const question = exam?.questions?.[currentQuestionIndex];
+  const isLastQuestion = exam?.questions ? currentQuestionIndex === exam.questions.length - 1 : false;
+  const canGoBack = currentQuestionIndex > 0 && exam?.settings?.allowBackNavigation;
+
+  const questionGroupId = question ? questionIdToGroupIdMap.get(question.id) : undefined;
+  const groupInfo = (questionGroupId && exam?.questionGroups) ? exam.questionGroups.find(g => g.id === questionGroupId) : undefined;
+
+  // ✅ Logic to determine if the current question should be locked
+  const isQuestionLocked = useMemo(() => {
+    if (!question || !groupInfo) return false; // Not in a group, not locked
+    const status = groupAnswerStatus[groupInfo.id];
+    if (!status) return false;
+    const isAnswered = status.answeredIds.has(question.id);
+    if (isAnswered) return false; // Can always edit an answered question
+    return status.answeredIds.size >= groupInfo.requiredCount;
+  }, [question, groupInfo, groupAnswerStatus]);
+
+  // ✅ Lock Screen Overlay
+  if (isLocked) {
+    return (
+      <div className="fixed inset-0 z-50 bg-red-900 text-white flex flex-col items-center justify-center p-8 text-center">
+        <Lock className="w-24 h-24 mb-6 animate-pulse" />
+        <h1 className="text-4xl font-bold mb-4">Security Violation</h1>
+        <p className="text-xl mb-8 max-w-2xl">
+          Screen or Camera sharing was interrupted. Access to the exam is denied until streams are re-enabled.
+        </p>
+        <button 
+          onClick={() => window.location.reload()} 
+          className="px-8 py-4 bg-white text-red-900 font-bold rounded-xl hover:bg-gray-100 transition-colors"
+        >
+          Re-enable Streams & Resume
+        </button>
+      </div>
+    );
+  }
+
   // شاشة التحميل
   if (loading || loadingExam) {
     return (
@@ -705,23 +782,7 @@ function ExamPageContent() {
   }
 
   if (!exam) return null;
-
-  const question = exam.questions[currentQuestionIndex];
-  const isLastQuestion = currentQuestionIndex === exam.questions.length - 1;
-  const canGoBack = currentQuestionIndex > 0 && exam.settings?.allowBackNavigation;
-
-  const questionGroupId = questionIdToGroupIdMap.get(question.id);
-  const groupInfo = questionGroupId ? exam.questionGroups?.find(g => g.id === questionGroupId) : undefined;
-
-  // ✅ Logic to determine if the current question should be locked
-  const isQuestionLocked = useMemo(() => {
-    if (!groupInfo) return false; // Not in a group, not locked
-    const status = groupAnswerStatus[groupInfo.id];
-    if (!status) return false;
-    const isAnswered = status.answeredIds.has(question.id);
-    if (isAnswered) return false; // Can always edit an answered question
-    return status.answeredIds.size >= groupInfo.requiredCount;
-  }, [question, groupInfo, groupAnswerStatus]);
+  if (!question) return null;
 
   return (
     <>
