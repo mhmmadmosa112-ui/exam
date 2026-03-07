@@ -16,6 +16,7 @@ const ReactQuill = dynamic(
     const { default: RQ } = await import('react-quill');
     // eslint-disable-next-line react/display-name
     return ({ forwardedRef, ...props }: { forwardedRef: React.Ref<ReactQuillType>, [key: string]: any }) => <RQ ref={forwardedRef} {...props} />;
+    return ({ forwardedRef, ...props }: { forwardedRef: React.Ref<ReactQuillType>, [key: string]: any }) => <RQ {...props} ref={forwardedRef} />;
   },
   { ssr: false }
 );
@@ -79,6 +80,7 @@ export default function AdminCommunicationPage() {
   const announcementQuillRef = useRef<any>(null);
   
   // Announcement State
+
   const [announcementTarget, setAnnouncementTarget] = useState<'global' | 'targeted'>('global');
   const [targetSpec, setTargetSpec] = useState('');
   const [targetGrade, setTargetGrade] = useState('');
