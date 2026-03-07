@@ -8,9 +8,11 @@ import { useLanguage } from '@/context/LanguageContext';
 import Header from '@/components/Header';
 import {
   Users, Award, Download, Search, Edit, Trash2, CheckCircle,
-  XCircle, ArrowLeft, Calendar, BarChart3, Eye, X, FileText,
+  XCircle, ArrowLeft, BarChart3, Eye, X, FileText, Video,
   BookOpen, Settings, ChevronRight, Loader2
 } from 'lucide-react';
+import LiveGrid from './LiveGrid';
+import ExamCommander from '../../components/admin/ExamCommander';
 
 // ========== Interfaces ==========
 interface ExamResult {
@@ -27,7 +29,8 @@ interface ExamResult {
   isReviewed: boolean;
   adminNotes?: string;
   questions?: Array<{ id: number; question: string; options: string[]; correctAnswer: number }>;
-  answers?: number[];
+  answers?: (number | string | null)[];
+  essayAnswers?: string[];
 }
 
 interface Exam {
@@ -53,7 +56,7 @@ interface Stats {
   byTopic: Array<{ _id: string; count: number; avgScore: number }>;
 }
 
-type AdminTab = 'dashboard' | 'exams' | 'results' | 'subjects' | 'settings';
+type AdminTab = 'dashboard' | 'exams' | 'results' | 'subjects' | 'settings' | 'admins' | 'monitor';
 type ResultsView = 'list' | 'by-subject' | 'by-exam' | 'student-details';
 
 // ✅ المكون الرئيسي ← جميع الـ Hooks داخل هذه الدالة
@@ -95,13 +98,24 @@ export default function AdminPage() {
   const [editNotes, setEditNotes] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [questionScores, setQuestionScores] = useState<number[]>([]);
+  const [isSuperAdmin, setIsSuperAdmin] = useState(false);
+  const [themeSettings, setThemeSettings] = useState({
+    bgColor: '#f3f4f6', // gray-100
+    sidebarColor: '#ffffff', // white
+    primaryColor: '#4f46e5', // indigo-600
+    logoUrl: '',
+    faviconUrl: '',
+  });
 
   // ========== التحقق من صلاحية الأدمن ==========
   useEffect(() => {
     if (!loading && user) {
       const adminEmails = (process.env.NEXT_PUBLIC_ADMIN_EMAILS || '').split(',');
       if (user.email && !adminEmails.includes(user.email)) {
-        router.push('/dashboard');
+        router.push('/dashboard'); // Redirect non-admins to student dashboard
+      } else if (user.email) {
+        // Super Admin is the first email in the list
+        setIsSuperAdmin(adminEmails[0] === user.email);
       }
     }
   }, [user, loading, router]);
@@ -112,14 +126,14 @@ export default function AdminPage() {
     try {
       setLoadingData(true);
       setError('');
-
+      
       // جلب الإحصائيات
       const statsRes = await fetch('http://localhost:3001/api/admin/stats', {
         headers: { 'x-user-email': user.email }
       });
       const statsData = await statsRes.json();
       if (statsData.success) setStats(statsData.data);
-
+      
       // جلب المواد
       const subjectsRes = await fetch('http://localhost:3001/api/subjects', {
         headers: { 'x-user-email': user.email }
@@ -161,6 +175,28 @@ export default function AdminPage() {
   }, [user]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
+
+  // Load theme from localStorage on mount
+  useEffect(() => {
+    const savedTheme = localStorage.getItem('themeSettings');
+    if (savedTheme) {
+      try {
+        setThemeSettings(JSON.parse(savedTheme));
+      } catch (e) { console.error("Failed to parse theme settings", e); }
+    }
+  }, []);
+
+  const handleThemeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const { name, value } = e.target;
+    setThemeSettings(prev => ({ ...prev, [name]: value }));
+  };
+
+  const saveTheme = () => {
+    localStorage.setItem('themeSettings', JSON.stringify(themeSettings));
+    setSuccessMsg('Theme saved! Refresh to see changes globally.');
+    // Force a reload to apply styles everywhere.
+    setTimeout(() => window.location.reload(), 1000);
+  };
 
   // ========== دوال المساعدة ==========
   const formatDate = (dateString: string) => {
@@ -301,28 +337,22 @@ const viewResultDetails = async (result: ExamResult) => {
       headers: { 'x-user-email': user.email }
     });
     const data = await response.json();
-    
+
     if (data.success) {
-      setViewingDetails(data.data.result);
-      setEditScore(data.data.result.score.toString());
-      setEditNotes(data.data.result.adminNotes || '');
-      
-      // ✅ تهيئة درجات الأسئلة - مقارنة صحيحة
-      const qScores: number[] = data.data.result.questions?.map((q: any, idx: number) => {
-        const studentAnswer = data.data.result.answers?.[idx];
-        
-        // ✅ تحويل كلا القيمتين لـ number للمقارنة
-        const correctAnswerNum = typeof q.correctAnswer === 'string' 
-          ? parseInt(q.correctAnswer)
-          : Number(q.correctAnswer ?? -1);
-          
-        const studentAnswerNum = typeof studentAnswer === 'string'
-          ? parseInt(studentAnswer)
-          : Number(studentAnswer ?? -1);
-        
-        return studentAnswerNum === correctAnswerNum ? 1 : 0;
+      const detailedResult = data.data.result;
+      setViewingDetails(detailedResult);
+      setEditScore(detailedResult.score.toString());
+      setEditNotes(detailedResult.adminNotes || '');
+
+      // Initialize scores for manual override
+      const qScores: number[] = detailedResult.questions?.map((q: any, idx: number) => {
+        const studentAnswer = detailedResult.answers?.[idx];
+        const correctAnswerNum = Number(q.correctAnswer ?? -1);
+        const studentAnswerNum = Number(studentAnswer ?? -2);
+
+        return studentAnswerNum === correctAnswerNum ? (q.points || 10) : 0;
       }) || [];
-      
+
       setQuestionScores(qScores);
     }
   } catch (err) {
@@ -334,12 +364,15 @@ const viewResultDetails = async (result: ExamResult) => {
   const handleUpdateResult = async (resultId: string, publish = false) => {
     if (!user?.email) return;
     try {
+      const totalPoints = viewingDetails?.questions?.reduce((sum, q: any) => sum + (q.points || 10), 0) || 1;
+      const earnedPoints = questionScores.reduce((a, b) => a + b, 0);
+      const finalScore = Math.round((earnedPoints / totalPoints) * 100);
       const response = await fetch(`http://localhost:3001/api/admin/results/${resultId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json', 'x-user-email': user.email },
         body: JSON.stringify({
-          score: editScore ? Number(editScore) : undefined,
-          adminNotes: editNotes,
+          score: finalScore,
+          adminNotes: editNotes || `Manually reviewed.`,
           isReviewed: publish ? true : undefined  // ✅ مهم: ينشر النتيجة للطالب
         })
       });
@@ -366,8 +399,9 @@ const viewResultDetails = async (result: ExamResult) => {
   const saveQuestionReview = async (publish = false) => {
     if (!user?.email || !viewingDetails) return;
     try {
-      const totalScore = Math.round((questionScores.reduce((a, b) => a + b, 0) / questionScores.length) * 100);
-      
+      const totalPoints = viewingDetails.questions?.reduce((sum, q: any) => sum + (q.points || 10), 0) || 1;
+      const earnedPoints = questionScores.reduce((a, b) => a + b, 0);
+      const totalScore = Math.round((earnedPoints / totalPoints) * 100);
       const response = await fetch(`http://localhost:3001/api/admin/results/${viewingDetails._id}`, {
         method: 'PATCH',
         headers: { 
@@ -377,7 +411,7 @@ const viewResultDetails = async (result: ExamResult) => {
         body: JSON.stringify({
           score: totalScore,
           isReviewed: publish ? true : undefined,  // ✅ مهم: ينشر النتيجة للطالب
-          adminNotes: `تمت مراجعة ${questionScores.length} سؤال يدوياً`
+          adminNotes: editNotes || `تمت مراجعة ${questionScores.length} سؤال يدوياً`
         })
       });
       
@@ -404,7 +438,7 @@ const viewResultDetails = async (result: ExamResult) => {
     newScores[questionIndex] = score;
     setQuestionScores(newScores);
     // حساب النتيجة الإجمالية
-    const totalScore = Math.round((newScores.reduce((a, b) => a + b, 0) / newScores.length) * 100);
+    const totalScore = Math.round((newScores.reduce((a, b) => a + b, 0) / (viewingDetails?.questions?.reduce((sum, q: any) => sum + (q.points || 10), 0) || 1)) * 100);
     setEditScore(totalScore.toString());
   };
 
@@ -440,7 +474,7 @@ const viewResultDetails = async (result: ExamResult) => {
   // ========== شاشة التحميل ==========
   if (loading || loadingData) {
     return (
-      <div className="min-h-screen bg-gray-100 flex items-center justify-center">
+      <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="text-center">
           <Loader2 className="w-12 h-12 animate-spin text-indigo-600 mx-auto mb-4" />
           <p className="text-gray-700">{language === 'ar' ? 'جاري التحميل...' : 'Loading...'}</p>
@@ -452,7 +486,7 @@ const viewResultDetails = async (result: ExamResult) => {
   // ========== عرض مراجعة تفاصيل الطالب ==========
   if (viewingDetails && resultsView === 'student-details') {
     return (
-      <div className="min-h-screen bg-gray-100" dir={dir}>
+      <div className="min-h-screen bg-background" dir={dir}>
         <Header />
         <main className="max-w-6xl mx-auto p-4">
           {/* الشريط العلوي مع زر العودة */}
@@ -487,44 +521,53 @@ const viewResultDetails = async (result: ExamResult) => {
 
           {/* قائمة الأسئلة */}
           <div className="space-y-4">
-            {viewingDetails.questions?.map((q, idx) => (
+            {viewingDetails.questions?.map((q: any, idx) => (
               <div key={q.id} className="bg-white rounded-xl p-6 shadow">
                 <div className="flex justify-between items-start mb-4">
                   <div>
                     <p className="text-sm text-gray-500">{language === 'ar' ? `سؤال ${idx + 1}` : `Question ${idx + 1}`}</p>
                     <p className="font-bold text-lg">{q.question}</p>
                   </div>
-                  <span className={`px-3 py-1 rounded-full text-sm font-bold ${
-                    viewingDetails.answers?.[idx] === q.correctAnswer 
-                      ? 'bg-green-100 text-green-700' 
-                      : 'bg-red-100 text-red-700'
-                  }`}>
-                    {viewingDetails.answers?.[idx] === q.correctAnswer ? '✓' : '✗'}
-                  </span>
                 </div>
-                <div className="space-y-2">
-                  {q.options?.map((opt: string, optIdx: number) => (
-                    <div key={optIdx} className={`p-3 rounded-lg border ${
-                      optIdx === q.correctAnswer ? 'border-green-500 bg-green-50' :
-                      optIdx === viewingDetails.answers?.[idx] ? 'border-blue-500 bg-blue-50' : 'border-gray-200'
-                    }`}>
-                      <span className="font-bold mr-2">{String.fromCharCode(65 + optIdx)}.</span>{opt}
-                      {optIdx === q.correctAnswer && <CheckCircle className="w-4 h-4 text-green-600 inline ml-2" />}
-                      {optIdx === viewingDetails.answers?.[idx] && optIdx !== q.correctAnswer && <XCircle className="w-4 h-4 text-red-600 inline ml-2" />}
+                
+                {q.type === 'essay' || q.type === 'fill-blank' ? (
+                  <div className="mt-4 space-y-3">
+                    <div className="p-3 rounded-lg bg-blue-50 border border-blue-200">
+                      <p className="text-sm font-bold text-blue-800">{language === 'ar' ? 'إجابة الطالب' : 'Student\'s Answer'}</p>
+                      <p className="text-gray-800 whitespace-pre-wrap">{viewingDetails.essayAnswers?.[idx] || (language === 'ar' ? 'لم تتم الإجابة' : 'Not Answered')}</p>
                     </div>
-                  ))}
-                </div>
+                    <div className="p-3 rounded-lg bg-green-50 border border-green-200">
+                      <p className="text-sm font-bold text-green-800">{language === 'ar' ? 'الإجابة النموذجية' : 'Model Answer'}</p>
+                      <p className="text-gray-800 whitespace-pre-wrap">{q.modelAnswer?.[language] || q.modelAnswer?.ar || (language === 'ar' ? 'لا توجد إجابة نموذجية' : 'No Model Answer')}</p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {q.options?.map((opt: string, optIdx: number) => (
+                      <div key={optIdx} className={`p-3 rounded-lg border ${
+                        optIdx === q.correctAnswer ? 'border-green-500 bg-green-50' :
+                        optIdx === viewingDetails.answers?.[idx] ? 'border-red-500 bg-red-50' : 'border-gray-200'
+                      }`}>
+                        <span className="font-bold mr-2">{String.fromCharCode(65 + optIdx)}.</span>{opt}
+                        {optIdx === q.correctAnswer && <CheckCircle className="w-4 h-4 text-green-600 inline ml-2" />}
+                        {optIdx === viewingDetails.answers?.[idx] && optIdx !== q.correctAnswer && <XCircle className="w-4 h-4 text-red-600 inline ml-2" />}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
                 {/* تعديل درجة السؤال */}
-                <div className="mt-4 flex items-center gap-4">
-                  <label className="text-sm text-gray-700">{language === 'ar' ? 'درجة السؤال:' : 'Question Score:'}</label>
-                  <select
-                    value={questionScores[idx] || 0}
+                <div className="mt-4 flex items-center gap-4 border-t pt-4">
+                  <label className="text-sm font-bold text-gray-800">{language === 'ar' ? 'تعديل يدوي للدرجة:' : 'Manual Score Override:'}</label>
+                  <input
+                    type="number"
+                    min="0"
+                    max={q.points || 10}
+                    value={questionScores[idx] ?? ''}
                     onChange={(e) => updateQuestionScore(idx, Number(e.target.value))}
-                    className="px-3 py-1 border rounded-lg"
-                  >
-                    <option value="1">✅ 1</option>
-                    <option value="0">❌ 0</option>
-                  </select>
+                    className="w-24 px-3 py-2 border rounded-lg text-center font-bold"
+                  />
+                  <span className="text-sm text-gray-600">/ {q.points || 10} {language === 'ar' ? 'نقاط' : 'Points'}</span>
                 </div>
               </div>
             ))}
@@ -569,7 +612,7 @@ const viewResultDetails = async (result: ExamResult) => {
 
   // ========== الواجهة الرئيسية ==========
   return (
-    <div className="min-h-screen bg-gray-100" dir={dir}>
+    <div className="min-h-screen bg-background" dir={dir}>
       <Header />
       <div className="bg-white shadow-sm border-b sticky top-0 z-40">
         <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
@@ -589,6 +632,8 @@ const viewResultDetails = async (result: ExamResult) => {
                 (language === 'ar' ? 'تفاصيل الطالب' : 'Student Details')
               )}
               {activeTab === 'subjects' && (language === 'ar' ? 'إدارة المواد' : 'Manage Subjects')}
+              {activeTab === 'admins' && isSuperAdmin && (language === 'ar' ? 'إدارة المسؤولين' : 'Manage Admins')}
+              {activeTab === 'monitor' && (language === 'ar' ? 'المراقبة المباشرة' : 'Live Monitor')}
               {activeTab === 'settings' && (language === 'ar' ? 'الإعدادات' : 'Settings')}
             </h1>
           </div>
@@ -604,24 +649,26 @@ const viewResultDetails = async (result: ExamResult) => {
       <div className="max-w-7xl mx-auto px-4 py-4">
         {/* التبويبات */}
         <div className="flex flex-wrap gap-2 mb-6 bg-white rounded-xl p-2 shadow border border-gray-200">
-  {[
-    { id: 'dashboard', label: '📊 ' + (language === 'ar' ? 'الإحصائيات' : 'Stats'), icon: BarChart3 },
-    { id: 'subjects', label: '📚 ' + (language === 'ar' ? 'المواد' : 'Subjects'), icon: BookOpen },
-    { id: 'exams', label: '📝 ' + (language === 'ar' ? 'الامتحانات' : 'Exams'), icon: FileText },
-    { id: 'results', label: '📋 ' + (language === 'ar' ? 'النتائج' : 'Results'), icon: Award },
-    { id: 'settings', label: '⚙️ ' + (language === 'ar' ? 'الإعدادات' : 'Settings'), icon: Settings }
-  ].map(tab => (
-    <button
-      key={tab.id}
-      onClick={() => { setActiveTab(tab.id as AdminTab); }}
-      className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors ${
-        activeTab === tab.id ? 'bg-indigo-600 text-white' : 'text-gray-800 hover:bg-gray-100'
-      }`}
-    >
-      <tab.icon className="w-4 h-4" /> {tab.label}
-    </button>
-  ))}
-</div>
+          {[
+            { id: 'dashboard', label: '📊 ' + (language === 'ar' ? 'الإحصائيات' : 'Stats'), icon: BarChart3, adminOnly: false },
+            { id: 'subjects', label: '📚 ' + (language === 'ar' ? 'المواد' : 'Subjects'), icon: BookOpen, adminOnly: false },
+            { id: 'exams', label: '📝 ' + (language === 'ar' ? 'الامتحانات' : 'Exams'), icon: FileText, adminOnly: false },
+            { id: 'results', label: '📋 ' + (language === 'ar' ? 'النتائج' : 'Results'), icon: Award, adminOnly: false },
+            { id: 'monitor', label: '📹 ' + (language === 'ar' ? 'مباشر' : 'Live'), icon: Video, adminOnly: false },
+            { id: 'admins', label: '👥 ' + (language === 'ar' ? 'المسؤولون' : 'Admins'), icon: Users, adminOnly: true },
+            { id: 'settings', label: '⚙️ ' + (language === 'ar' ? 'الإعدادات' : 'Settings'), icon: Settings, adminOnly: true }
+          ].filter(tab => !tab.adminOnly || isSuperAdmin).map(tab => (
+            <button
+              key={tab.id}
+              onClick={() => { setActiveTab(tab.id as AdminTab); }}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors ${
+                activeTab === tab.id ? 'bg-indigo-600 text-white' : 'text-gray-800 hover:bg-gray-100'
+              }`}
+            >
+              <tab.icon className="w-4 h-4" /> {tab.label}
+            </button>
+          ))}
+        </div>
 
 
 
@@ -638,14 +685,10 @@ const viewResultDetails = async (result: ExamResult) => {
             <button onClick={() => setSuccessMsg('')} className="text-green-600"><X className="w-4 h-4" /></button>
           </div>
         )}
-{activeTab === 'dashboard' && stats && (
-  <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-    {/* ... محتوى الإحصائيات ... */}
-  </div>
-)}
         {/* ========== تبويب الإحصائيات ========== */}
         {activeTab === 'dashboard' && stats && (
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <>
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             {[
               { icon: Users, label: language === 'ar' ? 'إجمالي الطلاب' : 'Total Students', value: stats.totalStudents, color: 'text-indigo-600' },
               { icon: FileText, label: language === 'ar' ? 'إجمالي الامتحانات' : 'Total Exams', value: stats.totalExams, color: 'text-green-600' },
@@ -662,7 +705,8 @@ const viewResultDetails = async (result: ExamResult) => {
                 </div>
               </div>
             ))}
-          </div>
+            </div>
+          </>
         )}
 
         {/* ========== تبويب الامتحانات ========== */}
@@ -671,7 +715,7 @@ const viewResultDetails = async (result: ExamResult) => {
             <div className="flex flex-wrap justify-between items-center gap-4">
               <div className="flex gap-2">
                 <button
-                  onClick={() => router.push('/admin/exams')}
+                  onClick={() => setActiveTab('exams')}
                   className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg"
                 >
                   <FileText className="w-4 h-4" /> {language === 'ar' ? 'إنشاء امتحان' : 'Create Exam'}
@@ -792,7 +836,7 @@ const viewResultDetails = async (result: ExamResult) => {
             )}
             <div className="bg-white rounded-xl shadow p-4">
               <div className="flex flex-wrap gap-4 items-end">
-                <div className="flex-1 min-w-[200px]">
+                <div className="flex-1 min-w-50">
                   <label className="block text-sm text-gray-700 mb-1">{language === 'ar' ? 'بحث' : 'Search'}</label>
                   <div className="relative">
                     <Search className="absolute right-3 top-3 w-4 h-4 text-gray-400" />
@@ -989,6 +1033,29 @@ const viewResultDetails = async (result: ExamResult) => {
           </div>
         )}
 
+        {/* ========== تبويب المراقبة المباشرة ========== */}
+        {activeTab === 'monitor' && user?.email && (
+          <div>
+            {/* Show Commander if an exam is selected or active */}
+            {selectedExam && (
+               <ExamCommander 
+                 examId={selectedExam._id} 
+                 examTitle={language === 'ar' ? selectedExam.title.ar : selectedExam.title.en} 
+                 adminEmail={user.email} 
+               />
+            )}
+            <LiveGrid userEmail={user.email} isSuperAdmin={isSuperAdmin} />
+          </div>
+        )}
+
+        {/* ========== تبويب المسؤولين ========== */}
+        {activeTab === 'admins' && isSuperAdmin && (
+          <div className="bg-white rounded-xl shadow p-6">
+            <h2 className="text-lg font-semibold mb-4">{language === 'ar' ? 'إدارة المسؤولين' : 'Manage Admins'}</h2>
+            <p className="text-gray-600">{language === 'ar' ? 'سيتم تفعيل هذه الميزة قريباً. يمكنك هنا إضافة أو إزالة المسؤولين الفرعيين.' : 'This feature will be enabled soon. Here you can add or remove sub-admins.'}</p>
+          </div>
+        )}
+
         {/* ========== تبويب الإعدادات ========== */}
         {activeTab === 'settings' && (
           <div className="bg-white rounded-xl shadow p-6">
@@ -1012,5 +1079,4 @@ const viewResultDetails = async (result: ExamResult) => {
       </div>
     </div>
   );
-  
 }

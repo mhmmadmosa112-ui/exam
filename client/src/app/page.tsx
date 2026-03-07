@@ -27,8 +27,13 @@ export default function HomePage() {
 
   // ✅ useEffect الأول: التوجيه عند تسجيل الدخول
   useEffect(() => {
-    if (user) {
-      router.push('/dashboard');
+    if (user?.email) {
+      const adminEmails = (process.env.NEXT_PUBLIC_ADMIN_EMAILS || '').split(',');
+      if (adminEmails.includes(user.email)) {
+        router.push('/admin');
+      } else {
+        router.push('/dashboard');
+      }
     }
   }, [user, router]);
 
@@ -136,15 +141,13 @@ if (loading) {
   return (
     <>
       <Header />
-    
-      <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center">
+      <div className="min-h-screen bg-linear-to-br from-blue-50 to-indigo-100 flex items-center justify-center">
         <div className="text-center">
           <div className="animate-spin text-4xl mb-4">⏳</div>
           <p className="text-gray-600">جاري التحميل...</p>
         </div>
       </div>
-          </>  // ← أضف هذا الإغلاق
-
+    </>
     );
   }
 // تحقق من أن LanguageContext يعمل
@@ -153,10 +156,10 @@ if (typeof dir === 'undefined') {
 }
   return (
 
-    <main className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center p-4" dir={dir}>
+    <main className="min-h-screen bg-linear-to-br from-blue-50 to-indigo-100 flex items-center justify-center p-4" dir={dir}>
       {/* زر تبديل اللغة */}
 {/* زر تبديل اللغة - نسخة مضمونة للظهور */}
-<div className="fixed top-4 left-4 z-[9999]">
+<div className="fixed top-4 left-4 z-9999">
   <button
     onClick={toggleLanguage}
     className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg shadow-lg border-2 border-white transition-all transform hover:scale-105"

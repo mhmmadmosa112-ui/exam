@@ -1,12 +1,16 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef, useMemo, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { auth } from '@/lib/firebase';
 import { useAuthState } from 'react-firebase-hooks/auth';
 import { useLanguage } from '@/context/LanguageContext';
 import { Clock, ChevronLeft, ChevronRight, CheckCircle, Award, AlertCircle, Loader2 } from 'lucide-react';
 import Header from '@/components/Header';
+import { io, Socket } from 'socket.io-client';
+import Peer from 'simple-peer';
+import { useExamSocket } from './useExamSocket';
+
 
 // ✅ Interface للسؤال
 interface Question {
@@ -18,6 +22,20 @@ interface Question {
   points: number;
   modelAnswer?: { ar: string; en: string };
   keywords?: string[];
+}
+
+interface IOption {
+  id: string;
+  text: { ar: string; en: string };
+  isCorrect?: boolean;
+}
+
+// ✅ Interface for Question Groups from server
+interface QuestionGroup {
+  id: string;
+  title: { ar: string; en: string };
+  requiredCount: number;
+  questionIds: string[];
 }
 
 // ✅ Interface لإعدادات الامتحان
@@ -40,11 +58,12 @@ interface Exam {
   subjectId?: string;
   settings: ExamSettings;
   questions: Question[];
+  questionGroups?: QuestionGroup[];
   status: 'draft' | 'scheduled' | 'active' | 'closed' | 'published';
   isReviewed?: boolean;
 }
 
-export default function ExamPage() {
+function ExamPageContent() {
   const [user, loading] = useAuthState(auth);
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -67,6 +86,15 @@ export default function ExamPage() {
   const [loadingExam, setLoadingExam] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
+
+  // ✅ State for Conditional Groups
+  const [groupAnswerStatus, setGroupAnswerStatus] = useState<Record<string, { answeredIds: Set<string> }>>({});
+
+  // Proctoring State
+  const [socket, setSocket] = useState<Socket | null>(null);
+  const [peer, setPeer] = useState<Peer.Instance | null>(null);
+  const fallbackIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const [notifications, setNotifications] = useState<string[]>([]);
 
   // التوجيه إذا لم يكن مسجلاً
   useEffect(() => {
@@ -107,6 +135,14 @@ export default function ExamPage() {
           const qCount = data.data.questions?.length || 0;
           setStudentAnswers(new Array(qCount).fill(undefined));
           setEssayAnswers(new Array(qCount).fill(undefined));
+          // ✅ تهيئة حالة المجموعات
+          const initialGroupStatus: Record<string, { answeredIds: Set<string> }> = {};
+          if (data.data.questionGroups) {
+            data.data.questionGroups.forEach((group: QuestionGroup) => {
+              initialGroupStatus[group.id] = { answeredIds: new Set() };
+            });
+          }
+          setGroupAnswerStatus(initialGroupStatus);
         } else {
           if ((data.error || '').toLowerCase().includes('already submitted')) {
             const req = confirm(language === 'ar'
@@ -136,9 +172,41 @@ export default function ExamPage() {
     fetchExam();
   }, [examId, user]);
 
+  // ✅ Real-time Exam Commander Hook
+  const { socket: commanderSocket } = useExamSocket({
+    examId: examId || '',
+    studentId: user?.email || '',
+    onTimeExtended: (minutes: number) => {
+      setTimeRemaining(prev => prev + (minutes * 60));
+      const msg = language === 'ar' 
+        ? `📢 تم تمديد وقت الامتحان ${minutes} دقيقة` 
+        : `📢 Exam time extended by ${minutes} minutes`;
+      setNotifications(prev => [...prev, msg]);
+      // Optional: TTS
+      if ('speechSynthesis' in window) {
+        const utterance = new SpeechSynthesisUtterance(msg);
+        window.speechSynthesis.speak(utterance);
+      }
+      setTimeout(() => setNotifications(prev => prev.slice(1)), 5000);
+    },
+    onInstantLock: () => {
+      alert(language === 'ar' ? 'تم إنهاء الامتحان من قبل المسؤول.' : 'Exam ended by administrator.');
+      submitExam();
+    },
+    onClarification: (message: string) => {
+      setNotifications(prev => [...prev, `🔔 ${message}`]);
+      setTimeout(() => setNotifications(prev => prev.slice(1)), 10000);
+    },
+    onExamStart: () => {
+      if (!examStarted) {
+        startExam();
+      }
+    }
+  });
+
   // ✅ مراقبة الغش بالخروج من التبويب أو فقدان التركيز
   useEffect(() => {
-    if (!exam || !user || !examStarted || examSubmitted) return;
+    if (!exam || !user || !examStarted || examSubmitted || submitting) return;
     const handlerVisibility = () => {
       if (document.visibilityState === 'hidden') {
         alert(language === 'ar' ? 'تحذير: غادرت صفحة الامتحان' : 'Warning: You left the exam page');
@@ -173,7 +241,7 @@ export default function ExamPage() {
       document.removeEventListener('visibilitychange', handlerVisibility);
       window.removeEventListener('blur', handlerBlur);
     };
-  }, [exam, user, language, examStarted, examSubmitted]);
+  }, [exam, user, language, examStarted, examSubmitted, submitting]);
 
   // ✅ تحذير قبل الإغلاق/التحديث
   useEffect(() => {
@@ -187,12 +255,96 @@ export default function ExamPage() {
     return () => window.removeEventListener('beforeunload', beforeUnload);
   }, [examStarted, examSubmitted]);
 
+  const startScreenshotFallback = useCallback((camStream: MediaStream, screenStream: MediaStream, sock: Socket, fromId: string) => {
+    if (fallbackIntervalRef.current) clearInterval(fallbackIntervalRef.current);
+
+    const camVideo = document.createElement('video');
+    camVideo.srcObject = camStream;
+    camVideo.play();
+
+    const screenVideo = document.createElement('video');
+    screenVideo.srcObject = screenStream;
+    screenVideo.play();
+
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+
+    fallbackIntervalRef.current = setInterval(() => {
+        if (!ctx) return;
+        canvas.width = 320; canvas.height = 180;
+        ctx.drawImage(camVideo, 0, 0, 320, 180);
+        const cameraDataUrl = canvas.toDataURL('image/jpeg', 0.5);
+        ctx.drawImage(screenVideo, 0, 0, 320, 180);
+        const screenDataUrl = canvas.toDataURL('image/jpeg', 0.5);
+        sock.emit('screenshot-from-student', { from: fromId, camera: cameraDataUrl, screen: screenDataUrl });
+    }, 5000);
+  }, []);
+
   // ✅ دالة بدء الامتحان ← مهمة جداً لتشغيل العداد
-  const startExam = useCallback(() => {
-    if (!examStarted && exam) {
+  const startExam = useCallback(async () => {
+    if (!examStarted && exam && user) {
       setExamStarted(true);
+      
+      // Phase 2: Automated Capture & Streaming
+      try {
+        const cameraStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+
+        // Reuse the socket from the hook if available, otherwise create new (though hook creates one)
+        // Ideally we use the one from useExamSocket, but for WebRTC we might need the specific instance logic
+        // Let's use the one created here for WebRTC specifically to avoid conflict with the hook's logic
+        const newSocket = commanderSocket || io('http://localhost:3001/monitoring');
+        setSocket(newSocket); // Keep this for local state usage
+
+        let localPeer: Peer.Instance | null = null;
+
+        newSocket.on('connect', () => {
+            console.log('[Socket.IO] Student connected:', newSocket.id);
+            newSocket.emit('student-join', { studentId: user.email!, examId: exam._id });
+        });
+
+        // Listen for an offer from a specific admin
+        newSocket.on('admin-webrtc-signal', (payload: { signal: any, fromAdminSocketId: string }) => {
+            // Prevent creating multiple peers for one session
+            if (localPeer) {
+                console.log('[WebRTC] Peer connection already exists or is being established.');
+                return;
+            }
+
+            const p = new (Peer as any)({
+                initiator: false, // Student is not the initiator
+                trickle: false,
+            });
+            localPeer = p;
+            setPeer(p);
+
+            // Accept the admin's offer signal
+            p.signal(payload.signal);
+
+            // When our peer generates an answer signal, send it back to the specific admin
+            p.on('signal', (answerSignal: any) => {
+                newSocket.emit('student-webrtc-signal', { signal: answerSignal, toAdminSocketId: payload.fromAdminSocketId });
+            });
+
+            p.on('connect', () => {
+                console.log('[WebRTC] Connected to proctor!');
+                if (fallbackIntervalRef.current) clearInterval(fallbackIntervalRef.current);
+                p.addStream(cameraStream);
+                p.addStream(screenStream);
+            });
+
+            const startFallback = () => startScreenshotFallback(cameraStream, screenStream, newSocket, newSocket.id!);
+            p.on('error', (err: any) => { console.error('[WebRTC] P2P Error, starting fallback', err); startFallback(); });
+            p.on('close', () => { console.log('[WebRTC] P2P Closed, starting fallback'); startFallback(); });
+        });
+
+      } catch (err) {
+        console.error("Could not get media streams", err);
+        setError("Camera and Screen sharing are required to start the exam.");
+        setExamStarted(false); // Revert start
+      }
     }
-  }, [examStarted, exam]);
+  }, [examStarted, exam, user, startScreenshotFallback]);
 
   // ✅ مؤقت الامتحان الرئيسي - مصحح
   useEffect(() => {
@@ -225,32 +377,75 @@ export default function ExamPage() {
     }
   }, [currentQuestionIndex, examStarted, examSubmitted, exam]);
 
+  // ✅ Create a map for quick question -> group lookup
+  const questionIdToGroupIdMap = useMemo(() => {
+    const map = new Map<string, string>();
+    if (!exam?.questionGroups) return map;
+    for (const group of exam.questionGroups) {
+      for (const qId of group.questionIds) {
+        map.set(qId, group.id);
+      }
+    }
+    return map;
+  }, [exam?.questionGroups]);
+
+  // ✅ Helper to update group answer status
+  const updateGroupStatus = (questionId: string, isAnswered: boolean) => {
+    const groupId = questionIdToGroupIdMap.get(questionId);
+    if (groupId) {
+      setGroupAnswerStatus(prev => {
+        const newStatus = { ...prev };
+        const answeredIds = new Set(newStatus[groupId].answeredIds);
+        if (isAnswered) {
+          answeredIds.add(questionId);
+        } else {
+          answeredIds.delete(questionId);
+        }
+        newStatus[groupId] = { answeredIds };
+        return newStatus;
+      });
+    }
+  };
+
   // ✅ اختيار إجابة للأسئلة الموضوعية ← يبدأ الامتحان تلقائياً عند أول إجابة
   const selectAnswer = useCallback((questionIndex: number, optionIndex: number) => {
     // ✅ بدء الامتحان عند أول إجابة
     if (!examStarted) {
       startExam();
     }
-    
+
+    const questionId = exam?.questions[questionIndex]?.id;
+    if (!questionId) return;
+
     setStudentAnswers(prev => {
       const newAnswers = [...prev];
-      newAnswers[questionIndex] = optionIndex;
+      const isClearing = newAnswers[questionIndex] === optionIndex;
+      newAnswers[questionIndex] = isClearing ? undefined : optionIndex;
+      
+      // Update group status
+      updateGroupStatus(questionId, !isClearing);
+
       return newAnswers;
     });
-  }, [examStarted, startExam]);
+  }, [examStarted, startExam, exam?.questions]);
 
   // ✅ حفظ إجابة إنشائية ← يبدأ الامتحان تلقائياً عند أول كتابة
   const saveEssayAnswer = useCallback((questionIndex: number, answer: string) => {
     if (!examStarted) {
       startExam();
     }
-    
+
+    const questionId = exam?.questions[questionIndex]?.id;
+    if (!questionId) return;
+
+    updateGroupStatus(questionId, answer.trim() !== '');
+
     setEssayAnswers(prev => {
       const newAnswers = [...prev];
       newAnswers[questionIndex] = answer;
       return newAnswers;
     });
-  }, [examStarted, startExam]);
+  }, [examStarted, startExam, exam?.questions]);
 
   // الانتقال للسؤال التالي
   const nextQuestion = useCallback(() => {
@@ -293,6 +488,12 @@ export default function ExamPage() {
       return;
     }
 
+    // Cleanup proctoring connections
+    if (peer) peer.destroy();
+    if (socket) socket.close();
+    if (fallbackIntervalRef.current) clearInterval(fallbackIntervalRef.current);
+
+
     try {
       setSubmitting(true);
       setError('');
@@ -321,29 +522,26 @@ export default function ExamPage() {
       const payload = {
         examId: exam._id,
         userId: user.uid,
-        userEmail: user.email,
+        userEmail: user.email!,
         userName: user.displayName || 'طالب',
         examTopic: exam.title?.[language] || exam.title?.ar,
         
-        // ✅ الأسئلة: استخدام الفهرس كـ string (يتوافق مع Schema)
-        // ✅ عند إعداد payload للإرسال:
-questions: exam.questions.map((q: any, idx: number) => ({
-  id: String(idx),  // ✅ تحويل الفهرس لـ string
+        questions: exam.questions.map((q: Question, idx: number) => ({
+  id: String(idx),
   question: q.text?.[language] || q.text?.ar,
   options: q.options?.map((opt: any) => 
-    typeof opt === 'string' ? opt : (opt.text?.[language] || opt.text?.ar || '')
+    opt.text?.[language] || opt.text?.ar || ''
   ) || [],
-  correctAnswer: q.options?.findIndex((opt: any) => opt.isCorrect === true) ?? -1,  // ✅ number فقط
+  correctAnswer: q.options?.findIndex((opt: any) => opt.isCorrect === true) ?? -1,
   points: q.points || 1,
   type: q.type || 'multiple-choice'
 })),
         
         // ✅ إجابات الطالب: غير المجابة تُرسل كـ null
         answers: studentAnswers.map(a => {
-          if (a === undefined) return null as any;
-          if (a === null) return null as any;
+          if (a === undefined || a === null) return null;
           const num = typeof a === 'string' ? parseInt(a) : Number(a);
-          return isNaN(num) ? null as any : num;
+          return isNaN(num) ? null : num;
         }),
         
         essayAnswers: essayAnswers.filter(a => a?.trim()),
@@ -410,7 +608,7 @@ questions: exam.questions.map((q: any, idx: number) => ({
   // شاشة التحميل
   if (loading || loadingExam) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-100 to-slate-200 flex items-center justify-center">
+      <div className="min-h-screen bg-linear-to-br from-slate-100 to-slate-200 flex items-center justify-center">
         <div className="text-center">
           <Loader2 className="w-12 h-12 animate-spin text-indigo-600 mx-auto mb-4" />
           <p className="text-gray-900 font-medium">{language === 'ar' ? 'جاري تحميل الامتحان...' : 'Loading exam...'}</p>
@@ -424,7 +622,7 @@ questions: exam.questions.map((q: any, idx: number) => ({
     return (
       <>
         <Header />
-        <main className="min-h-screen bg-gradient-to-br from-slate-100 to-slate-200 flex items-center justify-center p-4">
+        <main className="min-h-screen bg-linear-to-br from-slate-100 to-slate-200 flex items-center justify-center p-4">
           <div className="max-w-md w-full bg-white rounded-2xl shadow-xl p-8 text-center">
             <AlertCircle className="w-16 h-16 text-red-600 mx-auto mb-4" />
             <h1 className="text-2xl font-bold text-gray-900 mb-4">{language === 'ar' ? 'الامتحان غير موجود' : 'Exam Not Found'}</h1>
@@ -475,7 +673,7 @@ questions: exam.questions.map((q: any, idx: number) => ({
     return (
       <>
         <Header />
-        <main className="min-h-screen bg-gradient-to-br from-slate-100 to-slate-200 flex items-center justify-center p-4">
+        <main className="min-h-screen bg-linear-to-br from-slate-100 to-slate-200 flex items-center justify-center p-4">
           <div className="max-w-md w-full bg-white rounded-2xl shadow-xl p-8 text-center">
             <div className={`inline-flex items-center justify-center w-20 h-20 rounded-full mb-6 ${
               score >= 70 ? 'bg-green-600' : score >= 50 ? 'bg-yellow-600' : 'bg-red-600'
@@ -512,11 +710,31 @@ questions: exam.questions.map((q: any, idx: number) => ({
   const isLastQuestion = currentQuestionIndex === exam.questions.length - 1;
   const canGoBack = currentQuestionIndex > 0 && exam.settings?.allowBackNavigation;
 
+  const questionGroupId = questionIdToGroupIdMap.get(question.id);
+  const groupInfo = questionGroupId ? exam.questionGroups?.find(g => g.id === questionGroupId) : undefined;
+
+  // ✅ Logic to determine if the current question should be locked
+  const isQuestionLocked = useMemo(() => {
+    if (!groupInfo) return false; // Not in a group, not locked
+    const status = groupAnswerStatus[groupInfo.id];
+    if (!status) return false;
+    const isAnswered = status.answeredIds.has(question.id);
+    if (isAnswered) return false; // Can always edit an answered question
+    return status.answeredIds.size >= groupInfo.requiredCount;
+  }, [question, groupInfo, groupAnswerStatus]);
+
   return (
     <>
       <Header />
-      <main className="min-h-screen bg-gradient-to-br from-slate-200 via-slate-300 to-indigo-200 p-4" dir={dir}>
+      <main className="min-h-screen bg-linear-to-br from-slate-200 via-slate-300 to-indigo-200 p-4" dir={dir}>
         <div className="max-w-3xl mx-auto">
+          
+          {/* Notifications Toast */}
+          <div className="fixed top-20 right-4 z-50 space-y-2">
+            {notifications.map((note, idx) => (
+              <div key={idx} className="bg-blue-600 text-white px-6 py-4 rounded-lg shadow-lg animate-bounce">{note}</div>
+            ))}
+          </div>
           
           {/* الشريط العلوي - الوقت */}
           <div className={`fixed top-4 ${dir === 'rtl' ? 'right-4 left-4 md:left-auto' : 'left-4 right-4 md:right-auto'} md:w-96 bg-white rounded-xl shadow-lg p-4 flex items-center justify-between z-50 ${
@@ -552,6 +770,16 @@ questions: exam.questions.map((q: any, idx: number) => ({
               </div>
             </div>
 
+            {/* ✅ Group Information Badge */}
+            {groupInfo && (
+              <div className="mb-4 text-center">
+                <div className="inline-block bg-purple-100 text-purple-800 text-sm font-bold px-4 py-2 rounded-full">
+                  {getText(groupInfo.title)}: {language === 'ar' ? `أجب على ${groupInfo.requiredCount} من ${groupInfo.questionIds.length}` : `Answer ${groupInfo.requiredCount} of ${groupInfo.questionIds.length}`}
+                  <span className="ml-2 font-mono">({groupAnswerStatus[groupInfo.id]?.answeredIds.size || 0}/{groupInfo.requiredCount})</span>
+                </div>
+              </div>
+            )}
+
             {/* نص السؤال */}
             <h2 className={`text-xl font-bold text-gray-900 mb-6 ${dir === 'rtl' ? 'text-right' : 'text-left'}`}>
               {getText(question.text)}
@@ -563,15 +791,16 @@ questions: exam.questions.map((q: any, idx: number) => ({
                 {question.options.map((option, optIndex) => (
                   <button
                     key={option.id}
+                    disabled={isQuestionLocked}
                     onClick={() => selectAnswer(currentQuestionIndex, optIndex)}
                     className={`w-full p-4 rounded-xl border-2 ${dir === 'rtl' ? 'text-right' : 'text-left'} transition-all duration-200 ${
                       studentAnswers[currentQuestionIndex] === optIndex
                         ? 'border-indigo-600 bg-indigo-100 text-indigo-900 shadow-md'
-                        : 'border-gray-300 hover:border-gray-400 hover:bg-gray-50 bg-white'
+                        : isQuestionLocked ? 'border-gray-300 bg-gray-100 text-gray-500 cursor-not-allowed' : 'border-gray-300 hover:border-gray-400 hover:bg-gray-50 bg-white'
                     }`}
                   >
                     <div className={`flex items-center gap-3 ${dir === 'rtl' ? 'flex-row-reverse' : ''}`}>
-                      <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center flex-shrink-0 ${
+                      <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center shrink-0 ${
                         studentAnswers[currentQuestionIndex] === optIndex
                           ? 'border-indigo-600 bg-indigo-600 text-white'
                           : 'border-gray-300 bg-white'
@@ -592,9 +821,10 @@ questions: exam.questions.map((q: any, idx: number) => ({
                   {language === 'ar' ? 'اكتب إجابتك:' : 'Type your answer:'}
                 </label>
                 <textarea
+                  disabled={isQuestionLocked}
                   value={essayAnswers[currentQuestionIndex] || ''}
                   onChange={(e) => saveEssayAnswer(currentQuestionIndex, e.target.value)}
-                  className={`w-full p-4 border-2 border-gray-300 rounded-xl focus:ring-2 focus:ring-indigo-500 text-gray-900 placeholder-gray-500 ${dir === 'rtl' ? 'text-right' : 'text-left'}`}
+                  className={`w-full p-4 border-2 border-gray-300 rounded-xl focus:ring-2 focus:ring-indigo-500 text-gray-900 placeholder-gray-500 ${dir === 'rtl' ? 'text-right' : 'text-left'} ${isQuestionLocked ? 'bg-gray-100 cursor-not-allowed' : ''}`}
                   rows={6}
                   placeholder={language === 'ar' ? 'اكتب إجابتك هنا...' : 'Type your answer here...'}
                 />
@@ -682,5 +912,13 @@ questions: exam.questions.map((q: any, idx: number) => ({
         </div>
       </main>
     </>
+  );
+}
+
+export default function ExamPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center"><Loader2 className="w-8 h-8 animate-spin" /></div>}>
+      <ExamPageContent />
+    </Suspense>
   );
 }

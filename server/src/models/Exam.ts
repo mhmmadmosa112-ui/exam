@@ -20,6 +20,14 @@ export interface IQuestion {
   condition?: { groupId: string; required: number };
 }
 
+export interface IQuestionGroup {
+  id: string;
+  title: { ar: string; en: string };
+  requiredCount: number;
+  // This will store an array of IQuestion 'id' fields
+  questionIds: string[];
+}
+
 export interface IExam extends Document {
   title: { ar: string; en: string };
   subjectId: mongoose.Types.ObjectId;
@@ -38,6 +46,7 @@ export interface IExam extends Document {
     endDate?: Date;
   };
   questions: IQuestion[];
+  questionGroups?: IQuestionGroup[];
   status: 'draft' | 'scheduled' | 'active' | 'closed' | 'published';
   createdBy: string;
   aiGenerated?: boolean;
@@ -81,6 +90,20 @@ const QuestionSchema = new Schema({
   condition: { groupId: String, required: Number }
 }, { _id: false });
 
+// ✅ Schema for Question Groups
+const QuestionGroupSchema = new Schema({
+  id: { type: String, required: true },
+  title: {
+    ar: { type: String, required: true, default: 'مجموعة أسئلة' },
+    en: { type: String, default: 'Question Group' }
+  },
+  requiredCount: { type: Number, required: true, min: 1, default: 1 },
+  questionIds: {
+    type: [String],
+    default: []
+  }
+}, { _id: false });
+
 // ✅ Schema للامتحان - الحقول الإنجليزية اختيارية
 const ExamSchema = new Schema({
   title: {
@@ -106,6 +129,7 @@ const ExamSchema = new Schema({
     endDate: Date
   },
   questions: [QuestionSchema],
+  questionGroups: { type: [QuestionGroupSchema], default: [] },
   status: { type: String, enum: ['draft', 'scheduled', 'active', 'closed', 'published'], default: 'draft', index: true },
   createdBy: { type: String, required: true, index: true },
   aiGenerated: { type: Boolean, default: false },

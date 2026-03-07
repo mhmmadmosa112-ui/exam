@@ -132,13 +132,25 @@ router.get('/:id', adminAuth, async (req, res) => {
 // ✅ في route POST /api/exams
 router.post('/', adminAuth, requirePermission('canManageExams'), async (req, res) => {
   try {
-    const { title, subjectId, type, description, settings, questions, status, availability } = req.body;
+    const { title, subjectId, type, description, settings, questions, questionGroups, status, availability } = req.body;
     const userEmail = req.headers['x-user-email'] as string;
     
     // تحقق من وجود المادة
     const subject = await Subject.findById(subjectId);
     if (!subject) {
       return res.status(400).json({ success: false, error: 'المادة غير موجودة' });
+    }
+
+    // ✅ Group Validation
+    if (questionGroups) {
+      for (const group of questionGroups) {
+        if (group.requiredCount >= group.questionIds.length) {
+          return res.status(400).json({
+            success: false,
+            error: `Validation Error: In group "${group.title.ar}", the required count (${group.requiredCount}) must be less than the number of questions in it (${group.questionIds.length}).`
+          });
+        }
+      }
     }
 
     // تجهيز الأسئلة: ضبط الخيارات وتحديد correctAnswer كفهرس للأصناف الموضوعية
@@ -199,6 +211,7 @@ router.post('/', adminAuth, requirePermission('canManageExams'), async (req, res
         totalPoints
       },
       questions: questionsWithIds,
+      questionGroups: questionGroups || [],
       status: status || 'draft',  // ✅ استخدم من الـ Frontend
       availability: availability || {
         assignedTo: 'all',
@@ -224,12 +237,24 @@ router.post('/', adminAuth, requirePermission('canManageExams'), async (req, res
 // 4. تحديث امتحان
 router.patch('/:id', adminAuth, requirePermission('canManageExams'), async (req, res) => {
   try {
-    const { title, description, settings, questions, status } = req.body;
+    const { title, description, settings, questions, questionGroups, status } = req.body;
     
     const update: any = {};
     if (title) update.title = { ar: title.ar, en: title.en };
     if (description) update.description = { ar: description.ar, en: description.en };
     if (settings) update.settings = settings;
+    if (questionGroups) {
+      // ✅ Group Validation
+      for (const group of questionGroups) {
+        if (group.requiredCount >= group.questionIds.length) {
+          return res.status(400).json({
+            success: false,
+            error: `Validation Error: In group "${group.title.ar}", the required count (${group.requiredCount}) must be less than the number of questions in it (${group.questionIds.length}).`
+          });
+        }
+      }
+      update.questionGroups = questionGroups;
+    }
     if (questions) {
       const processed = (questions || []).map((q: any) => {
         const id = q.id || generateId();
@@ -546,18 +571,12 @@ ${studentAnswer.trim()}
 """
 
 ⚠️ معايير التصحيح الصارمة جداً:
-1) التطابق الدلالي مع الإجابة النموذجية شرط أساسي. إذا غابت النقاط الجوهرية في الإجابة النموذجية، الدرجة = 0.
-2) الكلمات المفتاحية مطلوبة: 
-   - لا كلمات مفتاحية مطابقة ⇒ الدرجة = 0.
-   - كلمات مفتاحية قليلة ⇒ خصم كبير (≥70%) حسب أهميتها.
-3) إجابة غير ذات صلة أو هراء أو حشو أو مخالفة للسؤال ⇒ الدرجة = 0.
-4) نسخ السؤال أو جمل عامة بدون مضمون ⇒ الدرجة = 0.
-5) الطول:
-   - أقل من 20 كلمة ⇒ حد أقصى 20% من ${points}.
-6) المحتوى:
-   - أخطاء علمية جوهرية ⇒ الدرجة = 0.
-7) التجانس:
-   - إن كانت الإجابة جزئية لكنها صحيحة وتشمل بعض النقاط الأساسية والكلمات المفتاحية ⇒ امنح درجة جزئية متناسبة.
+1. **الصلة بالموضوع**: إذا كانت الإجابة غير ذات صلة بالسؤال، أو مجرد هراء، أو حشو، أو نسخ للسؤال، فالدرجة هي 0.
+2. **المطابقة مع الإجابة النموذجية**: يجب أن تتطابق الإجابة دلاليًا مع النقاط الجوهرية في الإجابة النموذجية. إذا كانت الإجابة تفتقر إلى المفاهيم الأساسية، فالدرجة هي 0.
+3. **الكلمات المفتاحية**: يجب أن تحتوي الإجابة على الكلمات المفتاحية المتوقعة. إذا كانت الكلمات المفتاحية الأساسية مفقودة، فالدرجة هي 0.
+4. **الأخطاء العلمية**: أي خطأ علمي جوهري في الإجابة يجعل الدرجة 0.
+5. **الإجابات القصيرة جداً**: الإجابات التي تقل عن 10 كلمات تحصل على درجة 0.
+لا تمنح أي درجات جزئية. كن صارماً 100%. إما أن تكون الإجابة صحيحة بشكل كبير أو أنها 0.
 
 أجب بصيغة JSON فقط (بدون أي نص قبل أو بعد):
 {
@@ -715,5 +734,68 @@ ${contextText.substring(0, 10000)}
     res.status(500).json({ success: false, error: error.message });
   }
 });
+
+// ==================== SCORING LOGIC FOR SUBMISSION ROUTE ====================
+/*
+INSTRUCTION FOR THE DEVELOPER: The following logic should be integrated into your
+student exam submission route (e.g., in `POST /api/student-exams/submit`).
+It correctly calculates the score based on conditional question groups.
+
+You will need the `exam` document (specifically `exam.questions` and `exam.questionGroups`)
+and the student's answers (`studentAnswers` array).
+*/
+
+async function calculateGroupedScore(exam: any, studentAnswers: (number | undefined)[]) {
+  let earnedPoints = 0;
+  const totalPossiblePoints = 0;
+
+  const questionMap = new Map(exam.questions.map((q: any) => [q.id, q]));
+  const groupedQuestionIds = new Set(exam.questionGroups?.flatMap((g: any) => g.questionIds) || []);
+
+  // 1. Calculate score for non-grouped questions
+  exam.questions.forEach((q: any, idx: number) => {
+    if (!groupedQuestionIds.has(q.id)) {
+      const studentChoice = studentAnswers[idx];
+      const correctIndex = q.options?.findIndex((opt: any) => opt.isCorrect === true) ?? -1;
+      if (studentChoice === correctIndex && studentChoice !== undefined) {
+        earnedPoints += q.points || 1;
+      }
+    }
+  });
+
+  // 2. Calculate score for grouped questions
+  if (exam.questionGroups) {
+    for (const group of exam.questionGroups) {
+      const answeredQuestionsInGroup: any[] = [];
+
+      // Find which questions in this group were answered by the student
+      group.questionIds.forEach((qId: string) => {
+        const questionIndex = exam.questions.findIndex((q: any) => q.id === qId);
+        if (questionIndex !== -1 && studentAnswers[questionIndex] !== undefined) {
+          answeredQuestionsInGroup.push(exam.questions[questionIndex]);
+        }
+      });
+
+      // Take only the first 'requiredCount' answers for scoring
+      const questionsToScore = answeredQuestionsInGroup.slice(0, group.requiredCount);
+
+      for (const q of questionsToScore) {
+        const questionIndex = exam.questions.findIndex((examQ: any) => examQ.id === q.id);
+        const studentChoice = studentAnswers[questionIndex];
+        const correctIndex = q.options?.findIndex((opt: any) => opt.isCorrect === true) ?? -1;
+        if (studentChoice === correctIndex) {
+          earnedPoints += q.points || 1;
+        }
+      }
+    }
+  }
+  
+  // This is a simplified total points calculation. You should adapt it to your needs.
+  const totalPoints = exam.settings?.totalPoints || 100;
+  const finalScore = totalPoints > 0 ? Math.round((earnedPoints / totalPoints) * 100) : 0;
+
+  console.log(`[Scoring Debug] Grouped Earned Points: ${earnedPoints} | Final Score: ${finalScore}%`);
+  return { earnedPoints, finalScore };
+}
 
 export { router as examRoutes };

@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { auth } from '@/lib/firebase';
 import { useAuthState } from 'react-firebase-hooks/auth';
-import { BookOpen, Clock, Award, ArrowLeft, Eye, AlertCircle } from 'lucide-react';
+import { BookOpen, Clock, Award, ArrowLeft, Eye, AlertCircle, CheckCircle, XCircle } from 'lucide-react';
 import Header from '@/components/Header';
 
 interface ExamHistory {
@@ -16,6 +16,16 @@ interface ExamHistory {
   timeSpent: number;
   submittedAt: string;
   isReviewed: boolean;
+  // For detailed view
+  questions?: any[];
+  answers?: (number | string)[];
+  essayAnswers?: string[];
+}
+
+interface DetailedExamResult extends ExamHistory {
+  questions: Array<{ id: string; question: string; options: string[]; correctAnswer: number; modelAnswer?: {ar: string; en: string}; type: string; }>;
+  answers: (number | string)[];
+  essayAnswers?: string[];
 }
 
 export default function HistoryPage() {
@@ -25,7 +35,7 @@ export default function HistoryPage() {
   const [history, setHistory] = useState<ExamHistory[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(true);
   const [error, setError] = useState('');
-  const [selectedExam, setSelectedExam] = useState<ExamHistory | null>(null);
+  const [selectedExam, setSelectedExam] = useState<DetailedExamResult | null>(null);
 
   // التوجيه إذا لم يكن مسجل الدخول
   useEffect(() => {
@@ -34,6 +44,29 @@ export default function HistoryPage() {
     }
   }, [user, loading, router]);
 
+  const viewResultDetails = async (examResult: ExamHistory) => {
+    if (!user?.email) return;
+    try {
+      setLoadingHistory(true);
+      const response = await fetch(`http://localhost:3001/api/student-exams/result/${examResult._id}`, {
+        headers: { 'x-user-email': user.email }
+      });
+      const data = await response.json();
+      if (data.success) {
+        if (data.data.isReviewed && data.data.questions) {
+          setSelectedExam(data.data);
+        } else {
+          alert('Results are not published or details are unavailable.');
+        }
+      } else {
+        setError(data.error || 'Failed to fetch details');
+      }
+    } catch (err) {
+      setError('Failed to fetch details');
+    } finally {
+      setLoadingHistory(false);
+    }
+  };
   // جلب سجل الامتحانات
   useEffect(() => {
     const fetchHistory = async () => {
@@ -41,7 +74,7 @@ export default function HistoryPage() {
       
       try {
         setLoadingHistory(true);
-        setError('');
+        setError(''); 
         
         const response = await fetch(`http://localhost:3001/api/exam/history/${user.uid}`);
         const result = await response.json();
@@ -90,7 +123,7 @@ export default function HistoryPage() {
   // شاشة التحميل
   if (loading || loadingHistory) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center">
+      <div className="min-h-screen bg-linear-to-br from-blue-50 to-indigo-100 flex items-center justify-center">
         <div className="text-center">
           <div className="animate-spin text-4xl mb-4">⏳</div>
           <p className="text-gray-600">جاري تحميل السجل...</p>
@@ -105,7 +138,7 @@ export default function HistoryPage() {
         <>
     <Header />  {/* ← أضف هذا */}
     
-      <main className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-4" dir="rtl">
+      <main className="min-h-screen bg-linear-to-br from-blue-50 to-indigo-100 p-4" dir="rtl">
         <div className="max-w-3xl mx-auto">
           {/* زر الرجوع */}
           <button
@@ -157,6 +190,47 @@ export default function HistoryPage() {
                 💡 <strong>ملاحظة:</strong> تفاصيل الأسئلة والإجابات ستكون متاحة قريباً في نسخة المراجعة المتقدمة.
               </p>
             </div>
+
+            {/* Detailed Questions Review */}
+            <div className="mt-8 space-y-4">
+              <h2 className="text-xl font-bold text-gray-800">مراجعة الإجابات</h2>
+              {selectedExam.questions?.map((q, idx) => (
+                <div key={q.id} className="bg-white rounded-xl p-6 shadow-sm border">
+                  <p className="font-bold text-lg mb-4">{idx + 1}. {q.question}</p>
+                  
+                  {q.type === 'essay' || q.type === 'fill-blank' ? (
+                    <div className="space-y-3">
+                      <div className="p-3 rounded-lg bg-blue-50 border border-blue-200">
+                        <p className="text-sm font-bold text-blue-800">إجابتك</p>
+                        <p className="text-gray-800 whitespace-pre-wrap">{selectedExam.essayAnswers?.[idx] || 'لم تتم الإجابة'}</p>
+                      </div>
+                      <div className="p-3 rounded-lg bg-green-50 border border-green-200">
+                        <p className="text-sm font-bold text-green-800">الإجابة النموذجية</p>
+                        <p className="text-gray-800 whitespace-pre-wrap">{q.modelAnswer?.ar || 'غير متوفرة'}</p>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {q.options?.map((opt: string, optIdx: number) => (
+                        <div key={optIdx} className={`p-3 rounded-lg border flex items-center gap-3 ${
+                          optIdx === q.correctAnswer ? 'border-green-500 bg-green-50' :
+                          optIdx === selectedExam.answers?.[idx] ? 'border-red-500 bg-red-50' : 'border-gray-200'
+                        }`}>
+                          {optIdx === q.correctAnswer 
+                            ? <CheckCircle className="w-5 h-5 text-green-600 shrink-0" />
+                            : (optIdx === selectedExam.answers?.[idx] 
+                                ? <XCircle className="w-5 h-5 text-red-600 shrink-0" />
+                                : <div className="w-5 h-5 shrink-0" />)
+                          }
+                          <span>{opt}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+
           </div>
         </div>
       </main>
@@ -166,7 +240,7 @@ export default function HistoryPage() {
 
   // عرض قائمة السجل
   return (
-    <main className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-4" dir="rtl">
+    <main className="min-h-screen bg-linear-to-br from-blue-50 to-indigo-100 p-4" dir="rtl">
       <div className="max-w-4xl mx-auto">
         {/* الشريط العلوي */}
         <div className="bg-white rounded-2xl shadow-lg p-6 mb-6 flex justify-between items-center">
@@ -193,7 +267,7 @@ export default function HistoryPage() {
         {/* رسالة الخطأ */}
         {error && (
           <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-xl text-red-700 flex items-center gap-3">
-            <AlertCircle className="w-5 h-5 flex-shrink-0" />
+            <AlertCircle className="w-5 h-5 shrink-0" />
             <span>{error}</span>
           </div>
         )}
@@ -218,7 +292,7 @@ export default function HistoryPage() {
             {history.map((exam) => (
               <div
                 key={exam._id}
-                onClick={() => setSelectedExam(exam)}
+                onClick={() => exam.isReviewed ? viewResultDetails(exam) : alert('النتائج التفصيلية غير متاحة بعد.')}
                 className="bg-white rounded-xl shadow-lg p-6 cursor-pointer hover:shadow-xl transition-shadow"
               >
                 <div className="flex items-center justify-between">
@@ -235,7 +309,9 @@ export default function HistoryPage() {
                       </p>
                     </div>
                     
-                    <button className="p-2 hover:bg-gray-100 rounded-lg transition-colors">
+                    <button className={`p-2 rounded-lg transition-colors ${exam.isReviewed ? 'hover:bg-gray-100' : 'cursor-not-allowed opacity-50'}`}
+                      disabled={!exam.isReviewed}
+                    >
                       <Eye className="w-5 h-5 text-gray-600" />
                     </button>
                   </div>

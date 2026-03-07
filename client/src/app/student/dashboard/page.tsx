@@ -9,7 +9,7 @@ type ExamStatus = 'draft' | 'scheduled' | 'active' | 'closed' | 'published';
 
 interface Exam {
   _id: string;
-  title: { ar: string; en: string };
+  title: { ar: string; en: string }; 
   subjectId?: any;
   status: ExamStatus;
   availability?: { startDate?: string; endDate?: string };
@@ -25,11 +25,21 @@ interface ExamResultItem {
   isReviewed: boolean;
 }
 
+interface StudentProfile extends UserProfile {
+  major?: string;
+  bio?: string;
+  enrolledSubjectIds?: string[];
+}
+
+interface UserProfile {
+  fullName: string; photoURL: string; email: string; currentPassword: string; newPassword: string;
+}
+
 export default function StudentDashboard() {
   const [user, loading] = useAuthState(auth);
   const router = useRouter();
   const [tab, setTab] = useState<'profile' | 'exams' | 'completed' | 'calendar' | 'grades'>('exams');
-  const [profile, setProfile] = useState({ fullName: '', photoURL: '', email: '', currentPassword: '', newPassword: '' });
+  const [profile, setProfile] = useState<StudentProfile>({ fullName: '', photoURL: '', email: '', currentPassword: '', newPassword: '', major: 'Computer Science', bio: 'Aspiring developer.', enrolledSubjectIds: [] });
   const [savingProfile, setSavingProfile] = useState(false);
   const [error, setError] = useState('');
   const [exams, setExams] = useState<Exam[]>([]);
@@ -46,7 +56,9 @@ export default function StudentDashboard() {
       fullName: user.displayName || '',
       photoURL: user.photoURL || '',
       email: user.email || '',
-      currentPassword: '',
+      major: profile.major, // Keep existing custom fields
+      bio: profile.bio,
+      currentPassword: '', 
       newPassword: ''
     });
   }, [user]);
@@ -58,9 +70,13 @@ export default function StudentDashboard() {
         setLoadingData(true);
         setError('');
         const examsRes = await fetch('http://localhost:3001/api/student-exams', { headers: { 'x-user-email': user.email } });
-        const examsData = await examsRes.json();
+        const examsData = await examsRes.json(); 
         const histRes = await fetch(`http://localhost:3001/api/student-exams/history/${user.uid}?limit=100&page=1`, { headers: { 'x-user-email': user.email } });
         const histData = await histRes.json();
+        // MOCK: Fetch student profile with enrolled subjects
+        // const profileRes = await fetch(`http://localhost:3001/api/students/profile/${user.uid}`);
+        // const profileData = await profileRes.json();
+        // if (profileData.success) setProfile(p => ({...p, ...profileData.data}));
         setExams(Array.isArray(examsData?.data) ? examsData.data : []);
         setResults(Array.isArray(histData?.data?.results) ? histData.data.results : []);
       } catch (e: any) {
@@ -80,8 +96,13 @@ export default function StudentDashboard() {
   );
 
   const availableExams = useMemo(
-    () => publishedExams.filter(e => !completedExamIds.has(String(e._id))),
-    [publishedExams, completedExamIds]
+    () => publishedExams.filter(e => {
+      const isCompleted = completedExamIds.has(String(e._id));
+      // const isEnrolled = profile.enrolledSubjectIds?.includes(String(e.subjectId)); // UNCOMMENT WHEN API IS READY
+      const isEnrolled = true; // MOCK: Assume enrolled in all for now
+      return !isCompleted && isEnrolled;
+    }),
+    [publishedExams, completedExamIds, profile.enrolledSubjectIds]
   );
 
   const completedExamsList = useMemo(
@@ -106,6 +127,9 @@ export default function StudentDashboard() {
     try {
       setSavingProfile(true);
       setError('');
+      // TODO: Add API call to save custom profile fields like bio and major
+      // await fetch(`/api/students/profile/${user.uid}`, { method: 'PATCH', body: JSON.stringify({ bio: profile.bio, major: profile.major }) });
+
       if (profile.fullName !== (user.displayName || '') || profile.photoURL !== (user.photoURL || '')) {
         await updateProfile(user, { displayName: profile.fullName, photoURL: profile.photoURL });
       }
@@ -125,6 +149,8 @@ export default function StudentDashboard() {
       setSavingProfile(false);
     }
   };
+
+  const averageScore = useMemo(() => results.length > 0 ? Math.round(results.reduce((acc, r) => acc + r.score, 0) / results.length) : 0, [results]);
 
   return (
     <div className="min-h-screen bg-gray-100 text-black">
@@ -282,21 +308,39 @@ export default function StudentDashboard() {
 
         {tab === 'profile' && (
           <div className="bg-white rounded-xl shadow p-4">
-            <h2 className="text-xl font-bold mb-3">Profile</h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <h2 className="text-xl font-bold mb-6">Profile</h2>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              <div className="md:col-span-1 flex flex-col items-center">
+                <img src={profile.photoURL || '/avatar.png'} alt="Profile" className="w-32 h-32 rounded-full object-cover mb-4 border-4 border-gray-200" />
+                <input type="file" id="photoUpload" className="hidden" accept="image/*" />
+                <button onClick={() => document.getElementById('photoUpload')?.click()} className="px-4 py-2 text-sm bg-gray-200 text-black rounded-lg">Upload Photo</button>
+                <div className="mt-6 text-center">
+                  <p className="text-sm text-gray-500">Average Score / GPA</p>
+                  <p className="text-4xl font-bold text-indigo-600">{averageScore}%</p>
+                </div>
+              </div>
+              <div className="md:col-span-2 space-y-4">
               <div>
                 <label className="block text-sm font-semibold text-black mb-1">Full Name</label>
                 <input value={profile.fullName} onChange={e => setProfile(p => ({ ...p, fullName: e.target.value }))} className="w-full px-3 py-2 border rounded-lg font-bold text-black placeholder-black" />
               </div>
               <div>
                 <label className="block text-sm font-semibold text-black mb-1">Email</label>
-                <input value={profile.email} disabled className="w-full px-3 py-2 border rounded-lg font-bold text-black bg-gray-100" />
+                <input value={profile.email} disabled className="w-full px-3 py-2 border rounded-lg font-bold text-black bg-gray-100 cursor-not-allowed" />
               </div>
               <div>
-                <label className="block text-sm font-semibold text-black mb-1">Profile Picture URL</label>
-                <input value={profile.photoURL} onChange={e => setProfile(p => ({ ...p, photoURL: e.target.value }))} className="w-full px-3 py-2 border rounded-lg font-bold text-black placeholder-black" />
+                <label className="block text-sm font-semibold text-black mb-1">Major (التخصص)</label>
+                <input value={profile.major} onChange={e => setProfile(p => ({ ...p, major: e.target.value }))} className="w-full px-3 py-2 border rounded-lg font-bold text-black placeholder-black" />
               </div>
-              <div></div>
+              <div>
+                <label className="block text-sm font-semibold text-black mb-1">Bio</label>
+                <textarea value={profile.bio} onChange={e => setProfile(p => ({ ...p, bio: e.target.value }))} className="w-full px-3 py-2 border rounded-lg font-bold text-black placeholder-black" rows={3}></textarea>
+              </div>
+              </div>
+            </div>
+            <div className="mt-8 border-t pt-6">
+              <h3 className="text-lg font-bold mb-3">Change Password</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-semibold text-black mb-1">Current Password</label>
                 <input type="password" value={profile.currentPassword} onChange={e => setProfile(p => ({ ...p, currentPassword: e.target.value }))} className="w-full px-3 py-2 border rounded-lg font-bold text-black placeholder-black" />
@@ -305,6 +349,7 @@ export default function StudentDashboard() {
                 <label className="block text-sm font-semibold text-black mb-1">New Password</label>
                 <input type="password" value={profile.newPassword} onChange={e => setProfile(p => ({ ...p, newPassword: e.target.value }))} className="w-full px-3 py-2 border rounded-lg font-bold text-black placeholder-black" />
               </div>
+            </div>
             </div>
             <div className="flex justify-end mt-4">
               <button onClick={saveProfile} disabled={savingProfile} className="px-4 py-2 bg-indigo-600 text-white rounded-lg">
