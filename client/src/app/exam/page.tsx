@@ -76,7 +76,7 @@ export default function AdminCommunicationPage() {
   const [replyText, setReplyText] = useState('');
   const [announcementText, setAnnouncementText] = useState('');
   const replyQuillRef = useRef<any>(null);
-  const announcementQuillRef = useRef<any>(null);
+    const announcementQuillRef = useRef<any>(null);
   
 
   const [announcementTarget, setAnnouncementTarget] = useState<'global' | 'targeted'>('global');
