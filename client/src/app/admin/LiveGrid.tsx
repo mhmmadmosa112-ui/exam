@@ -1,9 +1,19 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import dynamic from 'next/dynamic';
 import { io, Socket } from 'socket.io-client';
-import { Search, Wifi, WifiOff } from 'lucide-react';
-import StreamCard from './StreamCard';
+import { Search, Wifi, WifiOff, Loader2 } from 'lucide-react';
+
+const StreamCard = dynamic(() => import('./StreamCard'), {
+    ssr: false,
+    loading: () => (
+        <div className="bg-gray-800 border border-gray-700 rounded-lg shadow-lg flex flex-col items-center justify-center aspect-video">
+            <Loader2 className="w-6 h-6 animate-spin text-gray-500" />
+            <p className="text-xs text-gray-500 mt-2">Initializing Stream...</p>
+        </div>
+    ),
+});
 
 // Interface for the student data received from the server
 export interface MonitoredStudent {

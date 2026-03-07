@@ -1,7 +1,6 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import Peer from 'simple-peer';
 import { Socket } from 'socket.io-client';
 import { Video, ScreenShare, MessageSquare, Maximize, Loader2, AlertTriangle } from 'lucide-react';
 import { MonitoredStudent } from './LiveGrid';
@@ -22,60 +21,55 @@ const StreamCard = ({ student, socket }: StreamCardProps) => {
     
     const cameraVideoRef = useRef<HTMLVideoElement>(null);
     const screenVideoRef = useRef<HTMLVideoElement>(null);
-    const peerRef = useRef<Peer.Instance | null>(null);
+    const peerRef = useRef<any>(null);
 
     useEffect(() => {
         if (!socket) return;
 
-        // Create a new Peer connection for this student
-        const newPeer = new (Peer as any)({
-            initiator: true, // Admin initiates the connection
-            trickle: false,
-        });
-        peerRef.current = newPeer;
-
-        // When we have a signal (offer), send it to the server to forward to the student
-        newPeer.on('signal', (signal: any) => {
-            socket.emit('admin-webrtc-signal', {
-                signal,
-                targetStudentSocketId: student.socketId,
+        // Dynamically import simple-peer only on the client-side
+        import('simple-peer').then(PeerModule => {
+            const Peer = PeerModule.default;
+            const newPeer = new (Peer as any)({
+                initiator: true, // Admin initiates the connection
+                trickle: false,
             });
+            peerRef.current = newPeer;
+
+            // When we have a signal (offer), send it to the server to forward to the student
+            newPeer.on('signal', (signal: any) => {
+                socket.emit('admin-webrtc-signal', {
+                    signal,
+                    targetStudentSocketId: student.socketId,
+                });
+            });
+
+            // When the connection is established
+            newPeer.on('connect', () => {
+                console.log(`[WebRTC] Connected to ${student.studentId}`);
+                setStatus('connected');
+            });
+
+            // When we receive a stream from the student
+            let streamsReceived = 0;
+            newPeer.on('stream', (stream: MediaStream) => {
+                console.log(`[WebRTC] Received stream from ${student.studentId}`, stream.id);
+                // The student sends two streams. Assume first is camera, second is screen.
+                if (streamsReceived === 0) {
+                    setCameraStream(stream);
+                    streamsReceived++;
+                } else {
+                    setScreenStream(stream);
+                }
+            });
+
+            // Handle errors and connection closing
+            const handleClose = () => {
+                console.log(`[WebRTC] Disconnected from ${student.studentId}. Switching to fallback.`);
+                setStatus('fallback');
+            };
+            newPeer.on('error', handleClose);
+            newPeer.on('close', handleClose);
         });
-
-        // When the student signals back (answer), connect
-        const handleStudentSignal = ({ signal, fromStudentSocketId }: { signal: any, fromStudentSocketId: string }) => {
-            if (fromStudentSocketId === student.socketId) {
-                newPeer.signal(signal);
-            }
-        };
-        socket.on('student-signal', handleStudentSignal);
-
-        // When the connection is established
-        newPeer.on('connect', () => {
-            console.log(`[WebRTC] Connected to ${student.studentId}`);
-            setStatus('connected');
-        });
-
-        // When we receive a stream from the student
-        let streamsReceived = 0;
-        newPeer.on('stream', (stream: MediaStream) => {
-            console.log(`[WebRTC] Received stream from ${student.studentId}`, stream.id);
-            // The student sends two streams. Assume first is camera, second is screen.
-            if (streamsReceived === 0) {
-                setCameraStream(stream);
-                streamsReceived++;
-            } else {
-                setScreenStream(stream);
-            }
-        });
-
-        // Handle errors and connection closing
-        const handleClose = () => {
-            console.log(`[WebRTC] Disconnected from ${student.studentId}. Switching to fallback.`);
-            setStatus('fallback');
-        };
-        newPeer.on('error', handleClose);
-        newPeer.on('close', handleClose);
 
         // Listen for tampering alerts
         const handleTampering = (data: { studentId: string }) => {
@@ -83,14 +77,23 @@ const StreamCard = ({ student, socket }: StreamCardProps) => {
                 setStatus('tampered');
             }
         };
+        
+        // When the student signals back (answer), connect
+        const handleStudentSignal = ({ signal, fromStudentSocketId }: { signal: any, fromStudentSocketId: string }) => {
+            if (fromStudentSocketId === student.socketId && peerRef.current) {
+                peerRef.current.signal(signal);
+            }
+        };
+
         socket.on('student-tampered', handleTampering);
+        socket.on('student-signal', handleStudentSignal);
 
         // Cleanup
         return () => {
             socket.off('student-signal', handleStudentSignal);
             socket.off('student-tampered', handleTampering);
-            if (newPeer) {
-                newPeer.destroy();
+            if (peerRef.current) {
+                peerRef.current.destroy();
             }
         };
     }, [student.socketId, socket]);
