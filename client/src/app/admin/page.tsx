@@ -111,12 +111,16 @@ interface Subject {
   _id: string;
   name: { ar: string; en: string };
   code?: string;
+  gradeId?: string;
+  specializationId?: string;
+  description?: { ar: string; en: string };
 }
 interface NewEntityForm {
   name: { ar: string; en: string };
   email?: string;
   password?: string;
-  // Add other fields as needed for different entities
+  authMethod: 'password' | 'google';
+  permissions?: AdminUser['permissions'];
 }
 
 interface Stats {
@@ -229,6 +233,9 @@ export default function AdminPage() {
   const [aiLoading, setAiLoading] = useState(false);
   const [aiResult, setAiResult] = useState<any>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  
+  // Exam Creation Filters
+  const [examSubjectFilter, setExamSubjectFilter] = useState({ gradeId: '', specializationId: '' });
 
   // حالات إدارة المواد
   const [showSubjectModal, setShowSubjectModal] = useState(false);
@@ -236,14 +243,22 @@ export default function AdminPage() {
   const [subjectForm, setSubjectForm] = useState({
     name: { ar: '', en: '' },
     code: '',
-    description: { ar: '', en: '' }
+    description: { ar: '', en: '' },
+    gradeId: '',
+    specializationId: ''
   });
   const [showAdminModal, setShowAdminModal] = useState(false);
   const [showStudentModal, setShowStudentModal] = useState(false);
   const [showGradeModal, setShowGradeModal] = useState(false);
   const [showSpecializationModal, setShowSpecializationModal] = useState(false);
   const [editingEntity, setEditingEntity] = useState<any | null>(null);
-  const [entityForm, setEntityForm] = useState<NewEntityForm>({ name: { ar: '', en: '' } });
+  const [entityForm, setEntityForm] = useState<NewEntityForm>({ 
+    name: { ar: '', en: '' }, 
+    authMethod: 'password',
+    permissions: {
+      canViewDashboard: true, canManageExams: false, canViewResults: false, canMonitor: false
+    }
+  });
   const [adminAssignments, setAdminAssignments] = useState<any[]>([]);
   const [studentAssignment, setStudentAssignment] = useState({ gradeId: '', specializationId: '' });
 
@@ -846,48 +861,135 @@ const viewResultDetails = async (result: ExamResult) => {
     }
   };
 
+  // ========== حذف كيان (إدارة النظام) ==========
+  const handleDeleteEntity = async (type: 'admin' | 'student' | 'grade' | 'specialization', id: string) => {
+    if (!confirm(language === 'ar' ? 'هل أنت متأكد من الحذف؟' : 'Are you sure you want to delete?')) return;
+    
+    // Optimistic update
+    if (type === 'admin') {
+        setAdminUsers(prev => prev.filter(u => u._id !== id));
+    } else if (type === 'student') {
+        setStudents(prev => prev.filter(s => s._id !== id));
+    } else if (type === 'grade') {
+        setGrades(prev => prev.filter(g => g._id !== id));
+    } else if (type === 'specialization') {
+        setSpecializations(prev => prev.filter(s => s._id !== id));
+    }
+    
+    // In a real app, you would call: await fetch(`/api/${type}s/${id}`, { method: 'DELETE' });
+    
+    setSuccessMsg(language === 'ar' ? 'تم الحذف بنجاح' : 'Deleted successfully');
+    setTimeout(() => setSuccessMsg(''), 3000);
+  };
+
   // ========== دوال إدارة النظام (محاكاة) ==========
   const openManagementModal = (type: 'admin' | 'student' | 'grade' | 'specialization', entity: any | null = null) => {
     setEditingEntity(entity);
     if (type === 'admin') {
-      setEntityForm(entity ? { name: { ar: entity.name, en: '' }, email: entity.email } : { name: { ar: '', en: '' }, email: '', password: '' });
+      setEntityForm(entity ? { 
+        name: { ar: entity.name, en: '' }, 
+        email: entity.email, 
+        authMethod: 'password',
+        permissions: entity.permissions 
+      } : { 
+        name: { ar: '', en: '' }, 
+        email: '', 
+        password: '', 
+        authMethod: 'password',
+        permissions: { canViewDashboard: true, canManageExams: false, canViewResults: false, canMonitor: false } 
+      });
       setAdminAssignments(entity ? entity.assignments : []);
       setShowAdminModal(true);
     } else if (type === 'student') {
-      setEntityForm(entity ? { name: { ar: entity.name, en: '' }, email: entity.email } : { name: { ar: '', en: '' }, email: '', password: '' });
+      setEntityForm(entity ? { 
+        name: { ar: entity.name, en: '' }, 
+        email: entity.email,
+        authMethod: 'password'
+      } : { 
+        name: { ar: '', en: '' }, 
+        email: '', 
+        password: '',
+        authMethod: 'password'
+      });
       setStudentAssignment(entity ? { gradeId: entity.gradeId, specializationId: entity.specializationId } : { gradeId: '', specializationId: '' });
       setShowStudentModal(true);
     } else if (type === 'grade') {
-      setEntityForm(entity ? { name: entity.name } : { name: { ar: '', en: '' } });
+      setEntityForm(entity ? { name: entity.name, authMethod: 'password' } : { name: { ar: '', en: '' }, authMethod: 'password' });
       setShowGradeModal(true);
     } else if (type === 'specialization') {
-      setEntityForm(entity ? { name: entity.name } : { name: { ar: '', en: '' } });
+      setEntityForm(entity ? { name: entity.name, authMethod: 'password' } : { name: { ar: '', en: '' }, authMethod: 'password' });
       setShowSpecializationModal(true);
     }
   };
 
-  const handleSaveEntity = (type: 'admin' | 'student' | 'grade' | 'specialization') => {
-    // This is a mock save function. In a real app, you'd call an API.
-    const newEntity = { _id: crypto.randomUUID(), ...entityForm };
-    if (type === 'admin') {
-      // @ts-ignore
-      setAdminUsers(prev => [...prev, { ...newEntity, name: newEntity.name.ar, assignments: adminAssignments, role: 'admin', permissions: { canViewDashboard: true, canManageExams: true, canViewResults: true, canMonitor: true } }]);
-      setShowAdminModal(false);
-    } else if (type === 'student') {
-      // @ts-ignore
-      setStudents(prev => [...prev, { ...newEntity, name: newEntity.name.ar, ...studentAssignment }]);
-      setShowStudentModal(false);
-    } else if (type === 'grade') {
-      // @ts-ignore
-      setGrades(prev => [...prev, newEntity]);
-      setShowGradeModal(false);
-    } else if (type === 'specialization') {
-      // @ts-ignore
-      setSpecializations(prev => [...prev, newEntity]);
-      setShowSpecializationModal(false);
+  const handleSaveEntity = async (type: 'admin' | 'student' | 'grade' | 'specialization') => {
+    if (!user?.email) return;
+
+    // In a real app, you would call your backend API here.
+    // The backend would handle creating the user in Firebase Auth and saving their role/permissions in Firestore.
+    try {
+        // Example for creating a user (teacher or student)
+        if (type === 'admin' || type === 'student') {
+            const payload = {
+                email: entityForm.email,
+                password: entityForm.authMethod === 'password' ? entityForm.password : undefined,
+                authMethod: entityForm.authMethod,
+                name: entityForm.name.ar,
+                role: type,
+                permissions: type === 'admin' ? entityForm.permissions : undefined,
+                assignments: type === 'admin' ? adminAssignments : studentAssignment,
+            };
+
+            // const endpoint = editingEntity ? `/api/users/${editingEntity._id}` : '/api/users/create';
+            // const method = editingEntity ? 'PATCH' : 'POST';
+            // const response = await fetch(endpoint, {
+            //     method,
+            //     headers: { 'Content-Type': 'application/json', 'x-user-email': user.email },
+            //     body: JSON.stringify(payload)
+            // });
+            // const data = await response.json();
+            // if (!data.success) {
+            //     throw new Error(data.error || 'Failed to save user');
+            // }
+        }
+        // Add similar logic for grades and specializations if they are saved to a DB
+    
+        // The following is a mock/optimistic update for the UI.
+        // In a real app, you would refetch the data or use the response from the API.
+        const newEntity = { _id: editingEntity ? editingEntity._id : crypto.randomUUID(), ...entityForm };
+        if (type === 'admin') {
+          // @ts-ignore
+          setAdminUsers(prev => {
+            const updated = editingEntity 
+              ? prev.map(u => u._id === newEntity._id ? { ...u, name: newEntity.name.ar, email: newEntity.email!, permissions: newEntity.permissions!, assignments: adminAssignments } : u)
+              : [...prev, { ...newEntity, name: newEntity.name.ar, email: newEntity.email!, role: 'admin', permissions: newEntity.permissions!, assignments: adminAssignments }];
+            return updated;
+          });
+          setShowAdminModal(false);
+        } else if (type === 'student') {
+          // @ts-ignore
+          setStudents(prev => {
+            const updated = editingEntity
+              ? prev.map(s => s._id === newEntity._id ? { ...s, name: newEntity.name.ar, email: newEntity.email!, ...studentAssignment } : s)
+              : [...prev, { ...newEntity, name: newEntity.name.ar, email: newEntity.email!, ...studentAssignment }];
+            return updated;
+          });
+          setShowStudentModal(false);
+        } else if (type === 'grade') {
+          // @ts-ignore
+          setGrades(prev => editingEntity ? prev.map(g => g._id === newEntity._id ? newEntity : g) : [...prev, newEntity]);
+          setShowGradeModal(false);
+        } else if (type === 'specialization') {
+          // @ts-ignore
+          setSpecializations(prev => editingEntity ? prev.map(s => s._id === newEntity._id ? newEntity : s) : [...prev, newEntity]);
+          setShowSpecializationModal(false);
+        }
+        setSuccessMsg(language === 'ar' ? 'تم الحفظ بنجاح' : 'Saved successfully');
+        setTimeout(() => setSuccessMsg(''), 3000);
+
+    } catch (err: any) {
+        setError(err.message || 'An error occurred while saving.');
     }
-    setSuccessMsg(`${type} saved successfully (simulation).`);
-    setTimeout(() => setSuccessMsg(''), 3000);
   };
 
   const handleAdminAssignmentChange = (gradeId: string, specializationId: string) => {
@@ -1546,7 +1648,7 @@ const viewResultDetails = async (result: ExamResult) => {
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-lg font-semibold">{language === 'ar' ? 'إدارة المواد' : 'Manage Subjects'}</h2>
               <button 
-                onClick={() => { openManagementModal('specialization') }}
+                onClick={() => { setEditingSubject(null); setSubjectForm({ name: { ar: '', en: '' }, code: '', description: { ar: '', en: '' }, gradeId: '', specializationId: '' }); setShowSubjectModal(true); }}
                 className="flex items-center gap-2 px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm"
               >
                 <Plus className="w-4 h-4" /> {language === 'ar' ? 'إضافة مادة' : 'Add Subject'}
@@ -1585,7 +1687,7 @@ const viewResultDetails = async (result: ExamResult) => {
                     </div>
                   </div>
                   <div className="flex gap-2">
-                    <button onClick={() => openManagementModal('specialization', subject)} className="p-2 hover:bg-indigo-50 text-indigo-600 rounded"><Edit className="w-4 h-4" /></button>
+                    <button onClick={() => { setEditingSubject(subject); setSubjectForm({ name: subject.name, code: subject.code || '', description: subject.description || { ar: '', en: '' }, gradeId: subject.gradeId || '', specializationId: subject.specializationId || '' }); setShowSubjectModal(true); }} className="p-2 hover:bg-indigo-50 text-indigo-600 rounded"><Edit className="w-4 h-4" /></button>
                     <button onClick={() => handleDelete('subject', subject._id)} className="p-2 hover:bg-red-50 text-red-600 rounded"><Trash2 className="w-4 h-4" /></button>
                   </div>
                 </div>
@@ -1641,7 +1743,10 @@ const viewResultDetails = async (result: ExamResult) => {
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead className="text-left bg-gray-50"><tr><th className="p-2">Name</th><th className="p-2">Email</th><th className="p-2">Assignments</th><th className="p-2">Actions</th></tr></thead>
-                  <tbody>{adminUsers.map(u => <tr key={u._id} className="border-b"><td className="p-2">{u.name}</td><td className="p-2">{u.email}</td><td className="p-2">{u.assignments.length} classes</td><td className="p-2"><button><Edit className="w-4 h-4" /></button></td></tr>)}</tbody>
+                  <tbody>{adminUsers.map(u => <tr key={u._id} className="border-b"><td className="p-2">{u.name}</td><td className="p-2">{u.email}</td><td className="p-2">{u.assignments.length} classes</td><td className="p-2 flex gap-2">
+                    <button onClick={() => openManagementModal('admin', u)} className="text-indigo-600"><Edit className="w-4 h-4" /></button>
+                    <button onClick={() => handleDeleteEntity('admin', u._id)} className="text-red-600"><Trash2 className="w-4 h-4" /></button>
+                  </td></tr>)}</tbody>
                 </table>
               </div>
             </div>
@@ -1654,7 +1759,10 @@ const viewResultDetails = async (result: ExamResult) => {
                <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead className="text-left bg-gray-50"><tr><th className="p-2">Name</th><th className="p-2">Email</th><th className="p-2">Class</th><th className="p-2">Actions</th></tr></thead>
-                  <tbody>{students.map(s => <tr key={s._id} className="border-b"><td className="p-2">{s.name}</td><td className="p-2">{s.email}</td><td className="p-2">{grades.find(g=>g._id === s.gradeId)?.name.ar} - {specializations.find(sp=>sp._id === s.specializationId)?.name.ar}</td><td className="p-2"><button><Edit className="w-4 h-4" /></button></td></tr>)}</tbody>
+                  <tbody>{students.map(s => <tr key={s._id} className="border-b"><td className="p-2">{s.name}</td><td className="p-2">{s.email}</td><td className="p-2">{grades.find(g=>g._id === s.gradeId)?.name.ar} - {specializations.find(sp=>sp._id === s.specializationId)?.name.ar}</td><td className="p-2 flex gap-2">
+                    <button onClick={() => openManagementModal('student', s)} className="text-indigo-600"><Edit className="w-4 h-4" /></button>
+                    <button onClick={() => handleDeleteEntity('student', s._id)} className="text-red-600"><Trash2 className="w-4 h-4" /></button>
+                  </td></tr>)}</tbody>
                 </table>
               </div>
             </div>
@@ -1665,14 +1773,24 @@ const viewResultDetails = async (result: ExamResult) => {
                   <h3 className="font-bold text-lg flex items-center gap-2"><Briefcase /> {language === 'ar' ? 'التخصصات' : 'Specializations'}</h3>
                   <button onClick={() => openManagementModal('specialization')} className="p-2 bg-gray-100 rounded-lg"><Plus className="w-4 h-4" /></button>
                 </div>
-                <ul className="space-y-2">{specializations.map(s => <li key={s._id} className="p-2 bg-gray-50 rounded">{s.name.ar}</li>)}</ul>
+                <ul className="space-y-2">{specializations.map(s => (
+                  <li key={s._id} className="p-2 bg-gray-50 rounded flex justify-between items-center">
+                    {s.name.ar}
+                    <div className="flex gap-2"><button onClick={() => openManagementModal('specialization', s)}><Edit className="w-4 h-4 text-indigo-600" /></button><button onClick={() => handleDeleteEntity('specialization', s._id)}><Trash2 className="w-4 h-4 text-red-600" /></button></div>
+                  </li>
+                ))}</ul>
               </div>
               <div className="bg-white rounded-xl shadow p-6">
                 <div className="flex justify-between items-center mb-4">
                   <h3 className="font-bold text-lg flex items-center gap-2"><Calendar /> {language === 'ar' ? 'المراحل' : 'Grades'}</h3>
                   <button onClick={() => openManagementModal('grade')} className="p-2 bg-gray-100 rounded-lg"><Plus className="w-4 h-4" /></button>
                 </div>
-                <ul className="space-y-2">{grades.map(g => <li key={g._id} className="p-2 bg-gray-50 rounded">{g.name.ar}</li>)}</ul>
+                <ul className="space-y-2">{grades.map(g => (
+                  <li key={g._id} className="p-2 bg-gray-50 rounded flex justify-between items-center">
+                    {g.name.ar}
+                    <div className="flex gap-2"><button onClick={() => openManagementModal('grade', g)}><Edit className="w-4 h-4 text-indigo-600" /></button><button onClick={() => handleDeleteEntity('grade', g._id)}><Trash2 className="w-4 h-4 text-red-600" /></button></div>
+                  </li>
+                ))}</ul>
               </div>
             </div>
           </div>
@@ -1854,10 +1972,22 @@ const viewResultDetails = async (result: ExamResult) => {
                         <input type="text" className="w-full border p-2 rounded" required value={examForm.title.en} onChange={e => setExamForm({...examForm, title: {...examForm.title, en: e.target.value}})} />
                       </div>
                       <div>
+                        <label className="block font-bold mb-1">{language === 'ar' ? 'المرحلة' : 'Grade'}</label>
+                        <select className="w-full border p-2 rounded mb-2" value={examSubjectFilter.gradeId} onChange={e => setExamSubjectFilter({...examSubjectFilter, gradeId: e.target.value})}>
+                          <option value="">{language === 'ar' ? 'اختر مرحلة' : 'Select Grade'}</option>
+                          {grades.map(g => <option key={g._id} value={g._id}>{g.name.ar}</option>)}
+                        </select>
+                        <label className="block font-bold mb-1">{language === 'ar' ? 'التخصص' : 'Specialization'}</label>
+                        <select className="w-full border p-2 rounded mb-2" value={examSubjectFilter.specializationId} onChange={e => setExamSubjectFilter({...examSubjectFilter, specializationId: e.target.value})}>
+                          <option value="">{language === 'ar' ? 'اختر تخصص' : 'Select Specialization'}</option>
+                          {specializations.map(s => <option key={s._id} value={s._id}>{s.name.ar}</option>)}
+                        </select>
                         <label className="block font-bold mb-1">{language === 'ar' ? 'المادة' : 'Subject'}</label>
                         <select className="w-full border p-2 rounded" required value={examForm.subjectId} onChange={e => setExamForm({...examForm, subjectId: e.target.value})}>
                           <option value="">{language === 'ar' ? 'اختر مادة' : 'Select Subject'}</option>
-                          {subjects.map(s => <option key={s._id} value={s._id}>{language === 'ar' ? s.name.ar : s.name.en}</option>)}
+                          {subjects
+                            .filter(s => (!examSubjectFilter.gradeId || s.gradeId === examSubjectFilter.gradeId) && (!examSubjectFilter.specializationId || s.specializationId === examSubjectFilter.specializationId))
+                            .map(s => <option key={s._id} value={s._id}>{language === 'ar' ? s.name.ar : s.name.en}</option>)}
                         </select>
                       </div>
                       <div>
@@ -2131,6 +2261,24 @@ const viewResultDetails = async (result: ExamResult) => {
                   <label className="block text-sm font-bold mb-1">{language === 'ar' ? 'رمز المادة' : 'Code'}</label>
                   <input type="text" className="w-full border p-2 rounded" value={subjectForm.code} onChange={e => setSubjectForm({...subjectForm, code: e.target.value})} />
                 </div>
+                <div>
+                  <label className="block text-sm font-bold mb-1">{language === 'ar' ? 'المرحلة' : 'Grade'}</label>
+                  <select className="w-full border p-2 rounded" value={subjectForm.gradeId} onChange={e => setSubjectForm({...subjectForm, gradeId: e.target.value})}>
+                    <option value="">{language === 'ar' ? 'اختر مرحلة' : 'Select Grade'}</option>
+                    {grades.map(g => <option key={g._id} value={g._id}>{g.name.ar}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-bold mb-1">{language === 'ar' ? 'التخصص' : 'Specialization'}</label>
+                  <select className="w-full border p-2 rounded" value={subjectForm.specializationId} onChange={e => setSubjectForm({...subjectForm, specializationId: e.target.value})}>
+                    <option value="">{language === 'ar' ? 'اختر تخصص' : 'Select Specialization'}</option>
+                    {specializations.map(s => <option key={s._id} value={s._id}>{s.name.ar}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-bold mb-1">{language === 'ar' ? 'الوصف' : 'Description'}</label>
+                  <textarea className="w-full border p-2 rounded" rows={3} value={subjectForm.description.ar} onChange={e => setSubjectForm({...subjectForm, description: { ...subjectForm.description, ar: e.target.value, en: e.target.value }})} />
+                </div>
                 <button type="submit" className="w-full bg-indigo-600 text-white py-2 rounded font-bold hover:bg-indigo-700">
                   {language === 'ar' ? 'حفظ' : 'Save'}
                 </button>
@@ -2143,11 +2291,30 @@ const viewResultDetails = async (result: ExamResult) => {
         {showAdminModal && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
             <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto p-6">
-              <h2 className="text-xl font-bold mb-4">{language === 'ar' ? 'إضافة/تعديل معلم' : 'Add/Edit Teacher'}</h2>
+              <div className="flex justify-between items-center mb-4">
+                <h2 className="text-xl font-bold">{language === 'ar' ? 'إضافة/تعديل معلم' : 'Add/Edit Teacher'}</h2>
+                <button onClick={() => setShowAdminModal(false)} className="p-2 hover:bg-gray-100 rounded-lg"><X className="w-5 h-5" /></button>
+              </div>
               <form onSubmit={(e) => { e.preventDefault(); handleSaveEntity('admin'); }} className="space-y-4">
                 <input type="text" placeholder={language === 'ar' ? 'الاسم' : 'Name'} required value={entityForm.name.ar} onChange={e => setEntityForm({...entityForm, name: { ar: e.target.value, en: e.target.value }})} className="w-full border p-2 rounded" />
                 <input type="email" placeholder={language === 'ar' ? 'البريد الإلكتروني' : 'Email'} required value={entityForm.email || ''} onChange={e => setEntityForm({...entityForm, email: e.target.value})} className="w-full border p-2 rounded" />
-                <input type="password" placeholder={language === 'ar' ? 'كلمة المرور' : 'Password'} required={!editingEntity} className="w-full border p-2 rounded" />
+                
+                <div className="flex gap-4 mb-2">
+                  <label className="flex items-center gap-2"><input type="radio" checked={entityForm.authMethod === 'password'} onChange={() => setEntityForm({...entityForm, authMethod: 'password'})} /> {language === 'ar' ? 'كلمة مرور' : 'Password'}</label>
+                  <label className="flex items-center gap-2"><input type="radio" checked={entityForm.authMethod === 'google'} onChange={() => setEntityForm({...entityForm, authMethod: 'google'})} /> {language === 'ar' ? 'حساب جوجل' : 'Google Account'}</label>
+                </div>
+                {entityForm.authMethod === 'password' && (
+                  <input type="password" placeholder={language === 'ar' ? 'كلمة المرور' : 'Password'} required={!editingEntity} className="w-full border p-2 rounded" />
+                )}
+
+                <h3 className="font-bold pt-2">{language === 'ar' ? 'الصلاحيات' : 'Permissions'}</h3>
+                <div className="grid grid-cols-2 gap-2 text-sm">
+                  <label className="flex items-center gap-2"><input type="checkbox" checked={entityForm.permissions?.canViewDashboard} onChange={e => setEntityForm({...entityForm, permissions: {...entityForm.permissions!, canViewDashboard: e.target.checked}})} /> {language === 'ar' ? 'عرض لوحة التحكم' : 'View Dashboard'}</label>
+                  <label className="flex items-center gap-2"><input type="checkbox" checked={entityForm.permissions?.canManageExams} onChange={e => setEntityForm({...entityForm, permissions: {...entityForm.permissions!, canManageExams: e.target.checked}})} /> {language === 'ar' ? 'إدارة الامتحانات' : 'Manage Exams'}</label>
+                  <label className="flex items-center gap-2"><input type="checkbox" checked={entityForm.permissions?.canViewResults} onChange={e => setEntityForm({...entityForm, permissions: {...entityForm.permissions!, canViewResults: e.target.checked}})} /> {language === 'ar' ? 'عرض النتائج' : 'View Results'}</label>
+                  <label className="flex items-center gap-2"><input type="checkbox" checked={entityForm.permissions?.canMonitor} onChange={e => setEntityForm({...entityForm, permissions: {...entityForm.permissions!, canMonitor: e.target.checked}})} /> {language === 'ar' ? 'المراقبة' : 'Monitor'}</label>
+                </div>
+
                 <h3 className="font-bold pt-4 border-t">{language === 'ar' ? 'تخصيص الفصول' : 'Assign Classes'}</h3>
                 <div className="grid grid-cols-2 gap-4 max-h-64 overflow-y-auto border p-2 rounded-lg">
                   {grades.map(g => (
@@ -2173,11 +2340,20 @@ const viewResultDetails = async (result: ExamResult) => {
         {showStudentModal && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
             <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg p-6">
-              <h2 className="text-xl font-bold mb-4">{language === 'ar' ? 'إضافة/تعديل طالب' : 'Add/Edit Student'}</h2>
+              <div className="flex justify-between items-center mb-4">
+                <h2 className="text-xl font-bold">{language === 'ar' ? 'إضافة/تعديل طالب' : 'Add/Edit Student'}</h2>
+                <button onClick={() => setShowStudentModal(false)} className="p-2 hover:bg-gray-100 rounded-lg"><X className="w-5 h-5" /></button>
+              </div>
               <form onSubmit={(e) => { e.preventDefault(); handleSaveEntity('student'); }} className="space-y-4">
                 <input type="text" placeholder={language === 'ar' ? 'الاسم' : 'Name'} required value={entityForm.name.ar} onChange={e => setEntityForm({...entityForm, name: { ar: e.target.value, en: e.target.value }})} className="w-full border p-2 rounded" />
                 <input type="email" placeholder={language === 'ar' ? 'البريد الإلكتروني' : 'Email'} required value={entityForm.email || ''} onChange={e => setEntityForm({...entityForm, email: e.target.value})} className="w-full border p-2 rounded" />
-                <input type="password" placeholder={language === 'ar' ? 'كلمة المرور' : 'Password'} required={!editingEntity} className="w-full border p-2 rounded" />
+                <div className="flex gap-4 mb-2">
+                  <label className="flex items-center gap-2"><input type="radio" checked={entityForm.authMethod === 'password'} onChange={() => setEntityForm({...entityForm, authMethod: 'password'})} /> {language === 'ar' ? 'كلمة مرور' : 'Password'}</label>
+                  <label className="flex items-center gap-2"><input type="radio" checked={entityForm.authMethod === 'google'} onChange={() => setEntityForm({...entityForm, authMethod: 'google'})} /> {language === 'ar' ? 'حساب جوجل' : 'Google Account'}</label>
+                </div>
+                {entityForm.authMethod === 'password' && (
+                  <input type="password" placeholder={language === 'ar' ? 'كلمة المرور' : 'Password'} required={!editingEntity} className="w-full border p-2 rounded" />
+                )}
                 <select value={studentAssignment.gradeId} onChange={e => setStudentAssignment({...studentAssignment, gradeId: e.target.value})} className="w-full border p-2 rounded">
                   <option value="">{language === 'ar' ? 'اختر المرحلة' : 'Select Grade'}</option>
                   {grades.map(g => <option key={g._id} value={g._id}>{g.name.ar}</option>)}
@@ -2200,8 +2376,8 @@ const viewResultDetails = async (result: ExamResult) => {
                   : (language === 'ar' ? 'إضافة تخصص' : 'Add Specialization')}
               </h2>
               <form onSubmit={(e) => { e.preventDefault(); handleSaveEntity(showGradeModal ? 'grade' : 'specialization'); }} className="space-y-4">
-                <input type="text" placeholder={language === 'ar' ? 'الاسم (عربي)' : 'Name (AR)'} required value={entityForm.name.ar} onChange={e => setEntityForm({name: {...entityForm.name, ar: e.target.value}})} className="w-full border p-2 rounded" />
-                <input type="text" placeholder={language === 'ar' ? 'الاسم (إنجليزي)' : 'Name (EN)'} required value={entityForm.name.en} onChange={e => setEntityForm({name: {...entityForm.name, en: e.target.value}})} className="w-full border p-2 rounded" />
+                <input type="text" placeholder={language === 'ar' ? 'الاسم (عربي)' : 'Name (AR)'} required value={entityForm.name.ar} onChange={e => setEntityForm(prev => ({...prev, name: {...prev.name, ar: e.target.value}}))} className="w-full border p-2 rounded" />
+                <input type="text" placeholder={language === 'ar' ? 'الاسم (إنجليزي)' : 'Name (EN)'} required value={entityForm.name.en} onChange={e => setEntityForm(prev => ({...prev, name: {...prev.name, en: e.target.value}}))} className="w-full border p-2 rounded" />
                 <div className="flex gap-2">
                   <button type="button" onClick={() => { setShowGradeModal(false); setShowSpecializationModal(false); }} className="flex-1 py-2 bg-gray-200 rounded-lg">{language === 'ar' ? 'إلغاء' : 'Cancel'}</button>
                   <button type="submit" className="flex-1 bg-indigo-600 text-white py-2 rounded font-bold">{language === 'ar' ? 'حفظ' : 'Save'}</button>
