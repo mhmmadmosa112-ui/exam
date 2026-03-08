@@ -9,6 +9,14 @@ import {
   MessageSquare, ChevronRight, Megaphone
 } from 'lucide-react';
 import 'react-quill/dist/quill.snow.css';
+import ReactDOM from 'react-dom';
+
+// ✅ Polyfill for findDOMNode (Required for ReactQuill with React 19)
+if (typeof window !== 'undefined' && !(ReactDOM as any).findDOMNode) {
+  (ReactDOM as any).findDOMNode = (component: any) => {
+    return component instanceof Element ? component : component?.current || null;
+  };
+}
 
 // ================== Types ==================
 type QuillOnChange = (content: string, delta: any, source: string, editor: any) => void;

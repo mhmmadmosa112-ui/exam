@@ -15,6 +15,15 @@ import {
     CheckCircle, XCircle, ArrowLeft
 } from 'lucide-react';
 import 'react-quill/dist/quill.snow.css';
+import ReactDOM from 'react-dom';
+
+// ✅ Polyfill for findDOMNode (Required for ReactQuill with React 19)
+if (typeof window !== 'undefined' && !(ReactDOM as any).findDOMNode) {
+  (ReactDOM as any).findDOMNode = (component: any) => {
+    return component instanceof Element ? component : component?.current || null;
+  };
+}
+
 // ✅ تعريف المحرر هنا (خارج الدالة) هو أهم خطوة لحل إيرور findDOMNode
 const ReactQuill = dynamic(() => import('react-quill') as any, {
   ssr: false,
