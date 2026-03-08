@@ -239,7 +239,6 @@ export default function AdminPage() {
 
   // ========== Quill Modules (with Image and Link) ==========
   const quillModules = useMemo(() => {
-    // A mock image handler. In a real app, this would upload the file to a server.
     const imageHandler = () => {
       const input = document.createElement('input');
       input.setAttribute('type', 'file');
@@ -248,15 +247,26 @@ export default function AdminPage() {
       input.onchange = () => {
         const file = input.files?.[0];
         if (file) {
-          alert(`Image selected: ${file.name}. In a real app, this would be uploaded.`);
-          // Here you would upload the file and get a URL, then insert it.
+          // In a real app, upload to server. Here we use Base64 for immediate preview.
+          const reader = new FileReader();
+          reader.onload = () => {
+            const range = (window as any).quillRef?.getEditor().getSelection(true);
+            (window as any).quillRef?.getEditor().insertEmbed(range.index, 'image', reader.result);
+          };
+          reader.readAsDataURL(file);
         }
       };
     };
 
     return {
       toolbar: {
-        container: [['bold', 'italic', 'underline'], ['link', 'image']],
+        container: [
+          [{ 'header': [1, 2, false] }],
+          ['bold', 'italic', 'underline', 'strike'],
+          [{ 'list': 'ordered'}, { 'list': 'bullet' }],
+          ['link', 'image'],
+          ['clean']
+        ],
         handlers: { image: imageHandler },
       },
     };
@@ -642,10 +652,14 @@ const viewResultDetails = async (result: ExamResult) => {
     }
     
     try {
-      const totalPoints = questions.reduce((sum, q) => sum + q.points, 0);
+      const totalPoints = questions.reduce((sum, q) => sum + (q.points || 0), 0);
+      
+      // Calculate total duration in minutes
+      const totalDuration = (examForm.settings.durationHours * 60) + examForm.settings.durationMinutes + (examForm.settings.durationSeconds / 60);
+
       const payload = {
         ...examForm,
-        settings: { ...examForm.settings, totalPoints },
+        settings: { ...examForm.settings, duration: totalDuration, totalPoints },
         questions: validQuestions
       };
       
@@ -1659,21 +1673,121 @@ const viewResultDetails = async (result: ExamResult) => {
                     </div>
 
                     {/* إعدادات الامتحان */}
-                    <div className="bg-gray-50 p-4 rounded-xl border">
-                      <h3 className="font-bold mb-3 flex items-center gap-2"><Settings className="w-4 h-4" /> {language === 'ar' ? 'الإعدادات' : 'Settings'}</h3>
-                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                        <div>
-                          <label className="block text-sm mb-1">{language === 'ar' ? 'المدة (دقيقة)' : 'Duration (min)'}</label>
-                          <input type="number" className="w-full border p-2 rounded" value={examForm.settings.duration} onChange={e => setExamForm({...examForm, settings: {...examForm.settings, duration: Number(e.target.value)}})} />
+                    <div className="space-y-4">
+                      {/* التوقيت والمدة */}
+                      <div className="bg-purple-50 p-4 rounded-xl border border-purple-200">
+                        <h3 className="font-bold mb-3 flex items-center gap-2 text-purple-900"><Calendar className="w-4 h-4" /> {language === 'ar' ? 'التوقيت والمدة' : 'Timing & Duration'}</h3>
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+                          <div>
+                            <label className="block text-sm mb-1">{language === 'ar' ? 'ساعات' : 'Hours'}</label>
+                            <input type="number" min="0" className="w-full border p-2 rounded" value={examForm.settings.durationHours} onChange={e => setExamForm({...examForm, settings: {...examForm.settings, durationHours: Number(e.target.value)}})} />
+                          </div>
+                          <div>
+                            <label className="block text-sm mb-1">{language === 'ar' ? 'دقائق' : 'Minutes'}</label>
+                            <input type="number" min="0" max="59" className="w-full border p-2 rounded" value={examForm.settings.durationMinutes} onChange={e => setExamForm({...examForm, settings: {...examForm.settings, durationMinutes: Number(e.target.value)}})} />
+                          </div>
+                          <div>
+                            <label className="block text-sm mb-1">{language === 'ar' ? 'ثواني' : 'Seconds'}</label>
+                            <input type="number" min="0" max="59" className="w-full border p-2 rounded" value={examForm.settings.durationSeconds} onChange={e => setExamForm({...examForm, settings: {...examForm.settings, durationSeconds: Number(e.target.value)}})} />
+                          </div>
                         </div>
-                        <div>
-                          <label className="block text-sm mb-1">{language === 'ar' ? 'درجة النجاح %' : 'Pass Score %'}</label>
-                          <input type="number" className="w-full border p-2 rounded" value={examForm.settings.passingScore} onChange={e => setExamForm({...examForm, settings: {...examForm.settings, passingScore: Number(e.target.value)}})} />
+                        
+                        <div className="flex gap-4 mb-4">
+                           <label className="flex items-center gap-2 cursor-pointer">
+                             <input type="radio" name="timeType" checked={!examForm.settings.timePerQuestion} onChange={() => setExamForm({...examForm, settings: {...examForm.settings, timePerQuestion: false}})} />
+                             <span className="text-sm">{language === 'ar' ? 'وقت للامتحان ككل' : 'Total Exam Time'}</span>
+                           </label>
+                           <label className="flex items-center gap-2 cursor-pointer">
+                             <input type="radio" name="timeType" checked={examForm.settings.timePerQuestion} onChange={() => setExamForm({...examForm, settings: {...examForm.settings, timePerQuestion: true}})} />
+                             <span className="text-sm">{language === 'ar' ? 'وقت لكل سؤال' : 'Time Per Question'}</span>
+                           </label>
                         </div>
-                        <div className="col-span-2 flex gap-4 items-center mt-6">
-                          <label className="flex items-center gap-2"><input type="checkbox" checked={examForm.settings.shuffleQuestions} onChange={e => setExamForm({...examForm, settings: {...examForm.settings, shuffleQuestions: e.target.checked}})} /> {language === 'ar' ? 'خلط الأسئلة' : 'Shuffle Qs'}</label>
-                          <label className="flex items-center gap-2"><input type="checkbox" checked={examForm.settings.allowReview} onChange={e => setExamForm({...examForm, settings: {...examForm.settings, allowReview: e.target.checked}})} /> {language === 'ar' ? 'السماح بالمراجعة' : 'Allow Review'}</label>
+                        
+                        {examForm.settings.timePerQuestion && (
+                          <div>
+                            <label className="block text-sm mb-1">{language === 'ar' ? 'الثواني لكل سؤال' : 'Seconds per Question'}</label>
+                            <input type="number" className="w-full border p-2 rounded" value={examForm.settings.timePerQuestionSeconds} onChange={e => setExamForm({...examForm, settings: {...examForm.settings, timePerQuestionSeconds: Number(e.target.value)}})} />
+                          </div>
+                        )}
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4 pt-4 border-t border-purple-200">
+                          <div>
+                            <label className="block text-sm mb-1">{language === 'ar' ? 'تاريخ البدء' : 'Start Date'}</label>
+                            <input type="datetime-local" className="w-full border p-2 rounded" value={examForm.settings.startDate || ''} onChange={e => setExamForm({...examForm, settings: {...examForm.settings, startDate: e.target.value}})} />
+                          </div>
+                          <div>
+                            <label className="block text-sm mb-1">{language === 'ar' ? 'تاريخ الانتهاء' : 'End Date'}</label>
+                            <input type="datetime-local" className="w-full border p-2 rounded" value={examForm.settings.endDate || ''} onChange={e => setExamForm({...examForm, settings: {...examForm.settings, endDate: e.target.value}})} />
+                          </div>
                         </div>
+                      </div>
+
+                      {/* إعدادات متقدمة */}
+                      <div className="bg-gray-50 p-4 rounded-xl border">
+                        <h3 className="font-bold mb-3 flex items-center gap-2"><Settings className="w-4 h-4" /> {language === 'ar' ? 'إعدادات متقدمة' : 'Advanced Settings'}</h3>
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                          <div>
+                            <label className="block text-sm mb-1">{language === 'ar' ? 'درجة النجاح %' : 'Pass Score %'}</label>
+                            <input type="number" className="w-full border p-2 rounded" value={examForm.settings.passingScore} onChange={e => setExamForm({...examForm, settings: {...examForm.settings, passingScore: Number(e.target.value)}})} />
+                          </div>
+                          <div className="col-span-3 grid grid-cols-2 gap-y-2">
+                            <label className="flex items-center gap-2"><input type="checkbox" checked={examForm.settings.shuffleQuestions} onChange={e => setExamForm({...examForm, settings: {...examForm.settings, shuffleQuestions: e.target.checked}})} /> {language === 'ar' ? 'خلط الأسئلة' : 'Shuffle Qs'}</label>
+                            <label className="flex items-center gap-2"><input type="checkbox" checked={examForm.settings.shuffleOptions} onChange={e => setExamForm({...examForm, settings: {...examForm.settings, shuffleOptions: e.target.checked}})} /> {language === 'ar' ? 'خلط الخيارات' : 'Shuffle Options'}</label>
+                            <label className="flex items-center gap-2"><input type="checkbox" checked={examForm.settings.allowReview} onChange={e => setExamForm({...examForm, settings: {...examForm.settings, allowReview: e.target.checked}})} /> {language === 'ar' ? 'السماح بالمراجعة' : 'Allow Review'}</label>
+                            <label className="flex items-center gap-2"><input type="checkbox" checked={examForm.settings.allowRetake} onChange={e => setExamForm({...examForm, settings: {...examForm.settings, allowRetake: e.target.checked}})} /> {language === 'ar' ? 'السماح بإعادة الامتحان' : 'Allow Retake'}</label>
+                            <label className="flex items-center gap-2"><input type="checkbox" checked={examForm.settings.allowBackNavigation} onChange={e => setExamForm({...examForm, settings: {...examForm.settings, allowBackNavigation: e.target.checked}})} /> {language === 'ar' ? 'السماح بالرجوع للخلف' : 'Allow Back Nav'}</label>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* التخصيص (Availability) */}
+                      <div className="bg-blue-50 p-4 rounded-xl border border-blue-200">
+                        <h3 className="font-bold mb-3 flex items-center gap-2 text-blue-900"><Users className="w-4 h-4" /> {language === 'ar' ? 'التخصيص' : 'Availability'}</h3>
+                        <div className="flex gap-4 mb-4">
+                           <label className="flex items-center gap-2 cursor-pointer">
+                             <input type="radio" name="assignedTo" value="all" checked={examForm.availability.assignedTo === 'all'} onChange={e => setExamForm({...examForm, availability: {...examForm.availability, assignedTo: 'all'}})} />
+                             <span className="text-sm">{language === 'ar' ? 'كل الطلاب' : 'All Students'}</span>
+                           </label>
+                           <label className="flex items-center gap-2 cursor-pointer">
+                             <input type="radio" name="assignedTo" value="specific" checked={examForm.availability.assignedTo === 'specific'} onChange={e => setExamForm({...examForm, availability: {...examForm.availability, assignedTo: 'specific'}})} />
+                             <span className="text-sm">{language === 'ar' ? 'مخصص' : 'Specific'}</span>
+                           </label>
+                        </div>
+                        
+                        {examForm.availability.assignedTo === 'specific' && (
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                              <label className="block text-sm font-bold mb-1">{language === 'ar' ? 'المراحل الدراسية' : 'Grades'}</label>
+                              <div className="max-h-32 overflow-y-auto border rounded bg-white p-2">
+                                {grades.map(g => (
+                                  <label key={g._id} className="flex items-center gap-2 mb-1">
+                                    <input type="checkbox" checked={examForm.availability.gradeIds?.includes(g._id)} onChange={e => {
+                                      const current = examForm.availability.gradeIds || [];
+                                      const updated = e.target.checked ? [...current, g._id] : current.filter((id: string) => id !== g._id);
+                                      setExamForm({...examForm, availability: {...examForm.availability, gradeIds: updated}});
+                                    }} />
+                                    <span className="text-sm">{g.name.ar}</span>
+                                  </label>
+                                ))}
+                              </div>
+                            </div>
+                            <div>
+                              <label className="block text-sm font-bold mb-1">{language === 'ar' ? 'التخصصات' : 'Specializations'}</label>
+                              <div className="max-h-32 overflow-y-auto border rounded bg-white p-2">
+                                {specializations.map(s => (
+                                  <label key={s._id} className="flex items-center gap-2 mb-1">
+                                    <input type="checkbox" checked={examForm.availability.specializationIds?.includes(s._id)} onChange={e => {
+                                      const current = examForm.availability.specializationIds || [];
+                                      const updated = e.target.checked ? [...current, s._id] : current.filter((id: string) => id !== s._id);
+                                      setExamForm({...examForm, availability: {...examForm.availability, specializationIds: updated}});
+                                    }} />
+                                    <span className="text-sm">{s.name.ar}</span>
+                                  </label>
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     </div>
 
@@ -1697,8 +1811,8 @@ const viewResultDetails = async (result: ExamResult) => {
                               <span className="font-bold">{language === 'ar' ? `سؤال ${idx + 1}` : `Q ${idx + 1}`}</span>
                             </div>
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-                              <ReactQuill value={q.text.ar} onChange={(val: string) => updateQuestion(q.id, { text: { ...q.text, ar: val } })} placeholder="Question (AR)" className="bg-white h-20 mb-8" />
-                              <ReactQuill value={q.text.en} onChange={(val: string) => updateQuestion(q.id, { text: { ...q.text, en: val } })} placeholder="Question (EN)" className="bg-white h-20 mb-8" />
+                              <ReactQuill ref={(el: any) => { if(el) (window as any).quillRef = el }} modules={quillModules} value={q.text.ar} onChange={(val: string) => updateQuestion(q.id, { text: { ...q.text, ar: val } })} placeholder="Question (AR)" className="bg-white h-24 mb-10" />
+                              <ReactQuill modules={quillModules} value={q.text.en} onChange={(val: string) => updateQuestion(q.id, { text: { ...q.text, en: val } })} placeholder="Question (EN)" className="bg-white h-24 mb-10" />
                             </div>
                             
                             {(q.type === 'multiple-choice' || q.type === 'true-false') && (
@@ -1725,6 +1839,23 @@ const viewResultDetails = async (result: ExamResult) => {
                                   const newOpts = [...(q.options || []), { id: crypto.randomUUID(), text: { ar: '', en: '' }, isCorrect: false }];
                                   updateQuestion(q.id, { options: newOpts });
                                 }} className="text-xs text-indigo-600 hover:underline">+ {language === 'ar' ? 'إضافة خيار' : 'Add Option'}</button>
+                              </div>
+                            )}
+
+                            {/* الإجابة النموذجية للأسئلة الإنشائية */}
+                            {q.type === 'essay' && (
+                              <div className="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+                                <label className="block text-sm font-bold mb-2 text-yellow-800">{language === 'ar' ? 'الإجابة النموذجية (للمصحح)' : 'Model Answer (For Grader)'}</label>
+                                <textarea 
+                                  className="w-full p-2 border rounded mb-2" 
+                                  rows={3} 
+                                  placeholder={language === 'ar' ? 'أدخل الإجابة النموذجية هنا...' : 'Enter model answer here...'}
+                                  value={q.correctAnswer?.ar || ''}
+                                  onChange={e => updateQuestion(q.id, { correctAnswer: { ar: e.target.value, en: q.correctAnswer?.en || '' } })}
+                                />
+                                <button type="button" className="flex items-center gap-2 text-xs bg-indigo-600 text-white px-3 py-1 rounded hover:bg-indigo-700 transition-colors">
+                                  <Sparkles className="w-3 h-3" /> {language === 'ar' ? 'تفعيل التصحيح بالذكاء الاصطناعي' : 'Enable AI Grading'}
+                                </button>
                               </div>
                             )}
                             
