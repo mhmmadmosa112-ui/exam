@@ -4,7 +4,17 @@ import { adminAuth, adminDb } from '@/lib/firebase-admin';
 // This function will handle creating both Admins (teachers) and Students
 export async function POST(req: Request) {
   if (!adminAuth || !adminDb) {
-    return NextResponse.json({ success: false, error: 'Server Error: Firebase Admin not initialized. Check .env.local and restart server.' }, { status: 500 });
+    // تشخيص المشكلة وإرسالها للعميل
+    const missingVars = [];
+    if (!process.env.FIREBASE_PROJECT_ID) missingVars.push('FIREBASE_PROJECT_ID');
+    if (!process.env.FIREBASE_CLIENT_EMAIL) missingVars.push('FIREBASE_CLIENT_EMAIL');
+    if (!process.env.FIREBASE_PRIVATE_KEY) missingVars.push('FIREBASE_PRIVATE_KEY');
+
+    if (missingVars.length > 0) {
+      return NextResponse.json({ success: false, error: `خطأ في الإعدادات: المتغيرات التالية مفقودة: ${missingVars.join(', ')}. تأكد من ملف .env.local وأعد تشغيل السيرفر.` }, { status: 500 });
+    }
+
+    return NextResponse.json({ success: false, error: 'خطأ في السيرفر: فشل تهيئة Firebase Admin. راجع سجلات التيرمينال للتفاصيل.' }, { status: 500 });
   }
 
   try {
