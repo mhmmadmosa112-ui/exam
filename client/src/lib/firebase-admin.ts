@@ -20,6 +20,9 @@ if (!admin.apps.length) {
       });
     } else {
       console.warn("⚠️ Firebase Admin environment variables are missing. API routes will fail.");
+      if (!process.env.FIREBASE_PROJECT_ID) console.warn(" - FIREBASE_PROJECT_ID is missing");
+      if (!process.env.FIREBASE_CLIENT_EMAIL) console.warn(" - FIREBASE_CLIENT_EMAIL is missing");
+      if (!process.env.FIREBASE_PRIVATE_KEY) console.warn(" - FIREBASE_PRIVATE_KEY is missing");
     }
   } catch (error: any) {
     console.error('Firebase admin initialization error', error.stack);
