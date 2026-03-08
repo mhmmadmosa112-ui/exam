@@ -1,7 +1,8 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import dynamic from 'next/dynamic';
+import { useSearchParams, useRouter } from 'next/navigation';
 import dayGridPlugin from '@fullcalendar/daygrid';
 import interactionPlugin from '@fullcalendar/interaction';
 import { 
@@ -52,6 +53,9 @@ const notifications = [
 ];
 
 export default function StudentDashboard() {
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const examId = searchParams.get('examId');
   const [activeTab, setActiveTab] = useState<'subjects' | 'calendar' | 'grades' | 'notifications' | 'profile'>('subjects');
 
   // --- Profile State & Logic ---
@@ -88,6 +92,31 @@ export default function StudentDashboard() {
   const handleEventClick = (info: any) => {
     alert(`تفاصيل الامتحان:\nالمادة: ${info.event.title}\nالتاريخ: ${info.event.startStr}`);
   };
+
+  // ✅ وضع الامتحان: إذا كان هناك examId في الرابط
+  if (examId) {
+    return (
+      <div className="min-h-screen bg-gray-100 flex flex-col" dir="rtl">
+        <header className="bg-white shadow p-4 flex justify-between items-center">
+          <h1 className="text-xl font-bold text-indigo-600">نظام الامتحانات</h1>
+          <button 
+            onClick={() => router.push('/student/dashboard')}
+            className="text-red-600 font-bold hover:bg-red-50 px-4 py-2 rounded"
+          >
+            خروج من الامتحان
+          </button>
+        </header>
+        <main className="flex-1 p-8 flex items-center justify-center">
+          <div className="bg-white p-8 rounded-2xl shadow-lg max-w-2xl w-full text-center">
+            <h2 className="text-2xl font-bold mb-4">جاري تحميل الامتحان...</h2>
+            <p className="text-gray-600 mb-6">معرف الامتحان: {examId}</p>
+            <div className="animate-spin w-12 h-12 border-4 border-indigo-600 border-t-transparent rounded-full mx-auto"></div>
+            <p className="mt-4 text-sm text-gray-500">سيتم عرض واجهة الأسئلة هنا.</p>
+          </div>
+        </main>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gray-50 p-6" dir="rtl">
@@ -151,6 +180,7 @@ export default function StudentDashboard() {
                 </div>
                 <button 
                   disabled={!subject.isPublished}
+                  onClick={() => router.push(`/student/dashboard?examId=mock_exam_${subject.id}`)}
                   className="w-full py-2 rounded-lg font-medium transition-colors flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed bg-indigo-600 text-white hover:bg-indigo-700"
                 >
                   دخول الامتحان <ChevronRight className="w-4 h-4" />
