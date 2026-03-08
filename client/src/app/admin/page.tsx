@@ -121,6 +121,8 @@ interface NewEntityForm {
   password?: string;
   authMethod: 'password' | 'google';
   permissions?: AdminUser['permissions'];
+  nationalId?: string;
+  phone?: string;
 }
 
 interface Stats {
@@ -257,7 +259,9 @@ export default function AdminPage() {
     authMethod: 'password',
     permissions: {
       canViewDashboard: true, canManageExams: false, canViewResults: false, canMonitor: false
-    }
+    },
+    nationalId: '',
+    phone: ''
   });
   const [adminAssignments, setAdminAssignments] = useState<any[]>([]);
   const [studentAssignment, setStudentAssignment] = useState({ gradeId: '', specializationId: '' });
@@ -890,13 +894,17 @@ const viewResultDetails = async (result: ExamResult) => {
         name: { ar: entity.name, en: '' }, 
         email: entity.email, 
         authMethod: 'password',
-        permissions: entity.permissions 
+        permissions: entity.permissions,
+        nationalId: entity.nationalId || '',
+        phone: entity.phone || ''
       } : { 
         name: { ar: '', en: '' }, 
         email: '', 
         password: '', 
         authMethod: 'password',
-        permissions: { canViewDashboard: true, canManageExams: false, canViewResults: false, canMonitor: false } 
+        permissions: { canViewDashboard: true, canManageExams: false, canViewResults: false, canMonitor: false },
+        nationalId: '',
+        phone: ''
       });
       setAdminAssignments(entity ? entity.assignments : []);
       setShowAdminModal(true);
@@ -925,67 +933,67 @@ const viewResultDetails = async (result: ExamResult) => {
   const handleSaveEntity = async (type: 'admin' | 'student' | 'grade' | 'specialization') => {
     if (!user?.email) return;
 
-    // In a real app, you would call your backend API here.
-    // The backend would handle creating the user in Firebase Auth and saving their role/permissions in Firestore.
     try {
-        // Example for creating a user (teacher or student)
-        if (type === 'admin' || type === 'student') {
-            const payload = {
-                email: entityForm.email,
-                password: entityForm.authMethod === 'password' ? entityForm.password : undefined,
-                authMethod: entityForm.authMethod,
-                name: entityForm.name.ar,
-                role: type,
-                permissions: type === 'admin' ? entityForm.permissions : undefined,
-                assignments: type === 'admin' ? adminAssignments : studentAssignment,
-            };
+      // Handle user creation (student/admin) by calling the backend API
+      if (type === 'admin' || type === 'student') {
+        if (editingEntity) {
+          alert("Editing users is not yet implemented. This action is for creating new users only.");
+          return;
+        }
 
-            // const endpoint = editingEntity ? `/api/users/${editingEntity._id}` : '/api/users/create';
-            // const method = editingEntity ? 'PATCH' : 'POST';
-            // const response = await fetch(endpoint, {
-            //     method,
-            //     headers: { 'Content-Type': 'application/json', 'x-user-email': user.email },
-            //     body: JSON.stringify(payload)
-            // });
-            // const data = await response.json();
-            // if (!data.success) {
-            //     throw new Error(data.error || 'Failed to save user');
-            // }
+        const payload = {
+          email: entityForm.email,
+          password: entityForm.authMethod === 'password' ? entityForm.password : undefined,
+          authMethod: entityForm.authMethod,
+          name: entityForm.name.ar,
+          role: type,
+          permissions: type === 'admin' ? entityForm.permissions : undefined,
+          nationalId: type === 'admin' ? entityForm.nationalId : undefined,
+          phone: type === 'admin' ? entityForm.phone : undefined,
+          assignments: type === 'admin' ? adminAssignments : undefined,
+          studentAssignment: type === 'student' ? studentAssignment : undefined,
+        };
+
+        const response = await fetch('/api/users/create', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+
+        const data = await response.json();
+        if (!data.success) {
+          throw new Error(data.error || 'Failed to save user');
         }
-        // Add similar logic for grades and specializations if they are saved to a DB
-    
-        // The following is a mock/optimistic update for the UI.
-        // In a real app, you would refetch the data or use the response from the API.
-        const newEntity = { _id: editingEntity ? editingEntity._id : crypto.randomUUID(), ...entityForm };
-        if (type === 'admin') {
-          // @ts-ignore
-          setAdminUsers(prev => {
-            const updated = editingEntity 
-              ? prev.map(u => u._id === newEntity._id ? { ...u, name: newEntity.name.ar, email: newEntity.email!, permissions: newEntity.permissions!, assignments: adminAssignments } : u)
-              : [...prev, { ...newEntity, name: newEntity.name.ar, email: newEntity.email!, role: 'admin', permissions: newEntity.permissions!, assignments: adminAssignments }];
-            return updated;
-          });
-          setShowAdminModal(false);
-        } else if (type === 'student') {
-          // @ts-ignore
-          setStudents(prev => {
-            const updated = editingEntity
-              ? prev.map(s => s._id === newEntity._id ? { ...s, name: newEntity.name.ar, email: newEntity.email!, ...studentAssignment } : s)
-              : [...prev, { ...newEntity, name: newEntity.name.ar, email: newEntity.email!, ...studentAssignment }];
-            return updated;
-          });
-          setShowStudentModal(false);
-        } else if (type === 'grade') {
-          // @ts-ignore
-          setGrades(prev => editingEntity ? prev.map(g => g._id === newEntity._id ? newEntity : g) : [...prev, newEntity]);
-          setShowGradeModal(false);
-        } else if (type === 'specialization') {
-          // @ts-ignore
-          setSpecializations(prev => editingEntity ? prev.map(s => s._id === newEntity._id ? newEntity : s) : [...prev, newEntity]);
-          setShowSpecializationModal(false);
-        }
-        setSuccessMsg(language === 'ar' ? 'تم الحفظ بنجاح' : 'Saved successfully');
-        setTimeout(() => setSuccessMsg(''), 3000);
+        setSuccessMsg(data.message);
+        // Refetch data to show the new user (or perform optimistic update)
+        fetchData();
+
+      } else {
+        // For grades and specializations, we continue with the mock/local update
+        // In a real app, this would also be an API call.
+        console.log(`Mock saving ${type}`);
+      }
+
+      // Optimistic UI update (can be removed if fetchData is fast enough)
+      const newEntity = { _id: editingEntity ? editingEntity._id : crypto.randomUUID(), ...entityForm };
+      if (type === 'admin') {
+        setAdminUsers(prev => [...prev, { ...newEntity, name: newEntity.name.ar, email: newEntity.email!, role: 'admin', permissions: newEntity.permissions!, assignments: adminAssignments, nationalId: entityForm.nationalId || '', phone: entityForm.phone || '' } as AdminUser]);
+        setShowAdminModal(false);
+      } else if (type === 'student') {
+        setStudents(prev => [...prev, { ...newEntity, name: newEntity.name.ar, email: newEntity.email!, ...studentAssignment } as Student]);
+        setShowStudentModal(false);
+      } else if (type === 'grade') {
+        setGrades(prev => editingEntity ? prev.map(g => g._id === newEntity._id ? newEntity as Grade : g) : [...prev, newEntity as Grade]);
+        setShowGradeModal(false);
+      } else if (type === 'specialization') {
+        setSpecializations(prev => editingEntity ? prev.map(s => s._id === newEntity._id ? newEntity as Specialization : s) : [...prev, newEntity as Specialization]);
+        setShowSpecializationModal(false);
+      }
+
+      if (!successMsg) { // Avoid overwriting API success message
+        setSuccessMsg(language === 'ar' ? 'تم الحفظ بنجاح (محاكاة)' : 'Saved successfully (simulation)');
+      }
+      setTimeout(() => setSuccessMsg(''), 4000);
 
     } catch (err: any) {
         setError(err.message || 'An error occurred while saving.');
@@ -2298,13 +2306,20 @@ const viewResultDetails = async (result: ExamResult) => {
               <form onSubmit={(e) => { e.preventDefault(); handleSaveEntity('admin'); }} className="space-y-4">
                 <input type="text" placeholder={language === 'ar' ? 'الاسم' : 'Name'} required value={entityForm.name.ar} onChange={e => setEntityForm({...entityForm, name: { ar: e.target.value, en: e.target.value }})} className="w-full border p-2 rounded" />
                 <input type="email" placeholder={language === 'ar' ? 'البريد الإلكتروني' : 'Email'} required value={entityForm.email || ''} onChange={e => setEntityForm({...entityForm, email: e.target.value})} className="w-full border p-2 rounded" />
+                <input type="text" placeholder={language === 'ar' ? 'رقم الهوية' : 'National ID'} value={entityForm.nationalId || ''} onChange={e => setEntityForm({...entityForm, nationalId: e.target.value})} className="w-full border p-2 rounded" />
+                <input type="text" placeholder={language === 'ar' ? 'رقم الهاتف' : 'Phone'} value={entityForm.phone || ''} onChange={e => setEntityForm({...entityForm, phone: e.target.value})} className="w-full border p-2 rounded" />
                 
                 <div className="flex gap-4 mb-2">
                   <label className="flex items-center gap-2"><input type="radio" checked={entityForm.authMethod === 'password'} onChange={() => setEntityForm({...entityForm, authMethod: 'password'})} /> {language === 'ar' ? 'كلمة مرور' : 'Password'}</label>
                   <label className="flex items-center gap-2"><input type="radio" checked={entityForm.authMethod === 'google'} onChange={() => setEntityForm({...entityForm, authMethod: 'google'})} /> {language === 'ar' ? 'حساب جوجل' : 'Google Account'}</label>
                 </div>
                 {entityForm.authMethod === 'password' && (
-                  <input type="password" placeholder={language === 'ar' ? 'كلمة المرور' : 'Password'} required={!editingEntity} className="w-full border p-2 rounded" />
+                  <input 
+                    type="password" 
+                    placeholder={language === 'ar' ? 'كلمة المرور' : 'Password'} 
+                    required={!editingEntity} 
+                    onChange={e => setEntityForm(prev => ({ ...prev, password: e.target.value }))}
+                    className="w-full border p-2 rounded" />
                 )}
 
                 <h3 className="font-bold pt-2">{language === 'ar' ? 'الصلاحيات' : 'Permissions'}</h3>
@@ -2352,7 +2367,12 @@ const viewResultDetails = async (result: ExamResult) => {
                   <label className="flex items-center gap-2"><input type="radio" checked={entityForm.authMethod === 'google'} onChange={() => setEntityForm({...entityForm, authMethod: 'google'})} /> {language === 'ar' ? 'حساب جوجل' : 'Google Account'}</label>
                 </div>
                 {entityForm.authMethod === 'password' && (
-                  <input type="password" placeholder={language === 'ar' ? 'كلمة المرور' : 'Password'} required={!editingEntity} className="w-full border p-2 rounded" />
+                  <input 
+                    type="password" 
+                    placeholder={language === 'ar' ? 'كلمة المرور' : 'Password'} 
+                    required={!editingEntity} 
+                    onChange={e => setEntityForm(prev => ({ ...prev, password: e.target.value }))}
+                    className="w-full border p-2 rounded" />
                 )}
                 <select value={studentAssignment.gradeId} onChange={e => setStudentAssignment({...studentAssignment, gradeId: e.target.value})} className="w-full border p-2 rounded">
                   <option value="">{language === 'ar' ? 'اختر المرحلة' : 'Select Grade'}</option>
