@@ -7,8 +7,17 @@ try {
   if (!admin.apps.length) {
     const projectId = process.env.FIREBASE_PROJECT_ID;
     const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
-    // تنظيف المفتاح من أي رموز زائدة قد تسبب خطأ Invalid PEM
-    const privateKey = process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n');
+    let privateKey = process.env.FIREBASE_PRIVATE_KEY;
+
+    // تنظيف المفتاح بشكل متقدم لتجنب أخطاء PEM
+    if (privateKey) {
+      // إزالة علامات التنصيص المحيطة إذا كانت موجودة (يحدث عند النسخ من ملفات JSON)
+      if (privateKey.startsWith('"') && privateKey.endsWith('"')) {
+        privateKey = privateKey.slice(1, -1);
+      }
+      // استبدال رموز السطر الجديد النصية بأسطر حقيقية
+      privateKey = privateKey.replace(/\\n/g, '\n');
+    }
 
     if (projectId && clientEmail && privateKey) {
       admin.initializeApp({
@@ -24,12 +33,16 @@ try {
     }
   }
 
-  if (admin.apps.length > 0) {
+  if (admin.apps.length > 0 && !adminAuth) {
     adminAuth = admin.auth();
     adminDb = admin.firestore();
   }
 } catch (error: any) {
-  console.error('❌ [Server] Firebase admin initialization error:', error.message);
+  console.error('❌ [Server] Firebase admin initialization error:', error);
+  // إذا كان الخطأ بسبب المكتبة المفقودة، نوضح الحل للمستخدم
+  if (error.code === 'MODULE_NOT_FOUND' || error.message?.includes('Cannot find module')) {
+    console.error('👉 الحل: قم بتشغيل الأمر التالي في التيرمينال: npm install @opentelemetry/api');
+  }
 }
 
 export { adminAuth, adminDb };
