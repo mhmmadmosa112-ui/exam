@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import dynamic from 'next/dynamic';
 import { auth } from '@/lib/firebase';
@@ -8,8 +8,8 @@ import { useAuthState } from 'react-firebase-hooks/auth';
 import { useLanguage } from '@/context/LanguageContext';
 import Header from '@/components/Header';
 import {
-  Users, Award, Download, Search, Edit, Trash2, CheckCircle,
-  XCircle, ArrowLeft, BarChart3, Eye, X, FileText, Video,
+  Users, Award, Download, Search, Edit, Trash2, CheckCircle, UserPlus, GraduationCap, Briefcase,
+  XCircle, ArrowLeft, BarChart3, Eye, X, FileText, Video, Link as LinkIcon, Image as ImageIcon,
   BookOpen, Settings, ChevronRight, Loader2, Plus, Sparkles,
   Save, Calendar, MessageSquare, Filter, Send, Megaphone, Paperclip
 } from 'lucide-react';
@@ -73,6 +73,32 @@ interface Question {
   keywords?: string[];
 }
 
+interface Grade { _id: string; name: { ar: string; en: string }; }
+interface Specialization { _id: string; name: { ar: string; en: string }; }
+interface AdminUser { 
+  _id: string; 
+  email: string; 
+  name: string;
+  nationalId: string;
+  phone: string;
+  permissions: {
+    canViewDashboard: boolean;
+    canManageExams: boolean;
+    canViewResults: boolean;
+    canMonitor: boolean;
+  };
+  role: 'admin' | 'super'; 
+  assignments: { gradeId: string; specializationId: string }[]; 
+}
+interface Student { _id: string; name: string; email: string; gradeId: string; specializationId: string; }
+
+interface Profile {
+  name: string;
+  phone: string;
+  nationalId: string;
+  socials: { twitter: string; linkedin: string; };
+  avatar: string;
+}
 interface Message {
   id: string;
   sender: 'student' | 'admin';
@@ -92,7 +118,7 @@ interface Stats {
   byTopic: Array<{ _id: string; count: number; avgScore: number }>;
 }
 
-type AdminTab = 'dashboard' | 'exams' | 'results' | 'subjects' | 'settings' | 'admins' | 'monitor' | 'communication';
+type AdminTab = 'dashboard' | 'exams' | 'results' | 'subjects' | 'management' | 'monitor' | 'communication' | 'profile';
 type ResultsView = 'list' | 'by-subject' | 'by-exam' | 'student-details';
 
 // ✅ المكون الرئيسي ← جميع الـ Hooks داخل هذه الدالة
@@ -111,7 +137,22 @@ export default function AdminPage() {
   // بيانات
   const [results, setResults] = useState<ExamResult[]>([]);
   const [exams, setExams] = useState<Exam[]>([]);
-  const [subjects, setSubjects] = useState<Subject[]>([]);
+  const [subjects, setSubjects] = useState<Subject[]>([{ _id: 'subj1', name: { ar: 'الفيزياء', en: 'Physics' } }]);
+  const [grades, setGrades] = useState<Grade[]>([{_id: '11', name: { ar: 'الحادي عشر', en: 'Grade 11'}}, {_id: '12', name: { ar: 'الثاني عشر', en: 'Grade 12'}}]);
+  const [specializations, setSpecializations] = useState<Specialization[]>([{_id: 'gdesign', name: { ar: 'تصميم جرافيكي', en: 'Graphic Design'}}, {_id: 'sci', name: { ar: 'علمي', en: 'Scientific'}}]);
+  const [adminUsers, setAdminUsers] = useState<AdminUser[]>([
+    { _id: 'admin1', email: 'teacher@example.com', name: 'John Doe', nationalId: '12345', phone: '555-1234', role: 'admin', permissions: { canViewDashboard: true, canManageExams: true, canViewResults: true, canMonitor: true }, assignments: [{ gradeId: '11', specializationId: 'gdesign' }] }
+  ]);
+  const [students, setStudents] = useState<Student[]>([
+    { _id: 'stud1', name: 'Ahmad', email: 'student@example.com', gradeId: '11', specializationId: 'gdesign' }
+  ]);
+  const [profile, setProfile] = useState<Profile>({ 
+    name: 'Mohammed Mosa', 
+    phone: '0591234567', 
+    nationalId: '123456789',
+    socials: { twitter: '', linkedin: '' },
+    avatar: ''
+  });
   const [stats, setStats] = useState<Stats | null>(null);
   
   // حالة التحميل والخطأ
@@ -121,6 +162,7 @@ export default function AdminPage() {
   
   // فلاتر والبحث
   const [searchTerm, setSearchTerm] = useState('');
+  const [globalFilter, setGlobalFilter] = useState({ gradeId: '', specializationId: '', subjectId: '' });
   const [statusFilter, setStatusFilter] = useState<string>('all');
   
   // التحديد للحذف الجماعي
@@ -135,13 +177,6 @@ export default function AdminPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [questionScores, setQuestionScores] = useState<number[]>([]);
   const [isSuperAdmin, setIsSuperAdmin] = useState(false);
-  const [themeSettings, setThemeSettings] = useState({
-    bgColor: '#f3f4f6', // gray-100
-    sidebarColor: '#ffffff', // white
-    primaryColor: '#4f46e5', // indigo-600
-    logoUrl: '',
-    faviconUrl: '',
-  });
 
   // ========== حالات إنشاء الامتحان (Merged from exams/page.tsx) ==========
   const [showExamModal, setShowExamModal] = useState(false);
@@ -167,18 +202,43 @@ export default function AdminPage() {
   const [commTab, setCommTab] = useState<'inbox' | 'announcements'>('inbox');
   const [replyText, setReplyText] = useState('');
   const [announcementText, setAnnouncementText] = useState('');
-  const replyQuillRef = useRef<any>(null);
-  const announcementQuillRef = useRef<any>(null);
+
+  // ========== Quill Modules (with Image and Link) ==========
+  const quillModules = useMemo(() => {
+    // A mock image handler. In a real app, this would upload the file to a server.
+    const imageHandler = () => {
+      const input = document.createElement('input');
+      input.setAttribute('type', 'file');
+      input.setAttribute('accept', 'image/*');
+      input.click();
+      input.onchange = () => {
+        const file = input.files?.[0];
+        if (file) {
+          alert(`Image selected: ${file.name}. In a real app, this would be uploaded.`);
+          // Here you would upload the file and get a URL, then insert it.
+        }
+      };
+    };
+
+    return {
+      toolbar: {
+        container: [['bold', 'italic', 'underline'], ['link', 'image']],
+        handlers: { image: imageHandler },
+      },
+    };
+  }, []);
 
   // ========== التحقق من صلاحية الأدمن ==========
   useEffect(() => {
     if (!loading && user) {
       const adminEmails = (process.env.NEXT_PUBLIC_ADMIN_EMAILS || '').split(',');
-      if (user.email && !adminEmails.includes(user.email)) {
-        router.push('/dashboard'); // Redirect non-admins to student dashboard
-      } else if (user.email) {
-        // Super Admin is the first email in the list
-        setIsSuperAdmin(adminEmails[0] === user.email);
+      // Mock logic: first email is super admin, others are sub-admins
+      const userRole = adminEmails.find(admin => admin === user.email);
+      if (!userRole) {
+        router.push('/student/dashboard');
+      } else {
+        setIsSuperAdmin(userRole === adminEmails[0]);
+        // If it's a sub-admin, you might want to fetch their specific assignments here
       }
     }
   }, [user, loading, router]);
@@ -254,28 +314,6 @@ export default function AdminPage() {
 
     return () => { socket.disconnect(); };
   }, [user, fetchData]);
-
-  // Load theme from localStorage on mount
-  useEffect(() => {
-    const savedTheme = localStorage.getItem('themeSettings');
-    if (savedTheme) {
-      try {
-        setThemeSettings(JSON.parse(savedTheme));
-      } catch (e) { console.error("Failed to parse theme settings", e); }
-    }
-  }, []);
-
-  const handleThemeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const { name, value } = e.target;
-    setThemeSettings(prev => ({ ...prev, [name]: value }));
-  };
-
-  const saveTheme = () => {
-    localStorage.setItem('themeSettings', JSON.stringify(themeSettings));
-    setSuccessMsg('Theme saved! Refresh to see changes globally.');
-    // Force a reload to apply styles everywhere.
-    setTimeout(() => window.location.reload(), 1000);
-  };
 
   // ========== دوال المساعدة ==========
   const formatDate = (dateString: string) => {
@@ -709,7 +747,7 @@ const viewResultDetails = async (result: ExamResult) => {
         <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-4">
             {resultsView !== 'list' && activeTab === 'results' && (
-              <button onClick={handleBack} className="p-2 hover:bg-gray-100 rounded-lg">
+              <button onClick={handleBack} className="p-2 hover:bg-gray-100 rounded-lg" title={language === 'ar' ? 'عودة' : 'Back'}>
                 <ArrowLeft className="w-5 h-5" />
               </button>
             )}
@@ -722,10 +760,8 @@ const viewResultDetails = async (result: ExamResult) => {
                 resultsView === 'by-exam' ? (language === 'ar' ? selectedExam?.title.ar : selectedExam?.title.en) :
                 (language === 'ar' ? 'تفاصيل الطالب' : 'Student Details')
               )}
-              {activeTab === 'subjects' && (language === 'ar' ? 'إدارة المواد' : 'Manage Subjects')}
-              {activeTab === 'admins' && isSuperAdmin && (language === 'ar' ? 'إدارة المسؤولين' : 'Manage Admins')}
+              {activeTab === 'subjects' && (language === 'ar' ? 'المواد الدراسية' : 'Subjects')}              {activeTab === 'management' && isSuperAdmin && (language === 'ar' ? 'إدارة النظام' : 'System Management')}
               {activeTab === 'monitor' && (language === 'ar' ? 'المراقبة المباشرة' : 'Live Monitor')}
-              {activeTab === 'settings' && (language === 'ar' ? 'الإعدادات' : 'Settings')}
             </h1>
           </div>
           <div className="flex items-center gap-2">
@@ -745,10 +781,10 @@ const viewResultDetails = async (result: ExamResult) => {
             { id: 'subjects', label: '📚 ' + (language === 'ar' ? 'المواد' : 'Subjects'), icon: BookOpen, adminOnly: false },
             { id: 'exams', label: '📝 ' + (language === 'ar' ? 'الامتحانات' : 'Exams'), icon: FileText, adminOnly: false },
             { id: 'results', label: '📋 ' + (language === 'ar' ? 'النتائج' : 'Results'), icon: Award, adminOnly: false },
-            { id: 'monitor', label: '📹 ' + (language === 'ar' ? 'مباشر' : 'Live'), icon: Video, adminOnly: false },
-            { id: 'admins', label: '👥 ' + (language === 'ar' ? 'المسؤولون' : 'Admins'), icon: Users, adminOnly: true },
-            { id: 'settings', label: '⚙️ ' + (language === 'ar' ? 'الإعدادات' : 'Settings'), icon: Settings, adminOnly: true },
-            { id: 'communication', label: '💬 ' + (language === 'ar' ? 'التواصل' : 'Communication'), icon: MessageSquare, adminOnly: false }
+            { id: 'monitor', label: '📹 ' + (language === 'ar' ? 'المراقبة' : 'Monitor'), icon: Video, adminOnly: false },
+            { id: 'communication', label: '💬 ' + (language === 'ar' ? 'التواصل' : 'Communication'), icon: MessageSquare, adminOnly: false },
+            { id: 'management', label: '⚙️ ' + (language === 'ar' ? 'الإدارة' : 'Management'), icon: Settings, adminOnly: true },
+            { id: 'profile', label: '👤 ' + (language === 'ar' ? 'ملفي' : 'Profile'), icon: Users, adminOnly: false },
           ].filter(tab => !tab.adminOnly || isSuperAdmin).map(tab => (
             <button
               key={tab.id}
@@ -803,7 +839,28 @@ const viewResultDetails = async (result: ExamResult) => {
 
         {/* ========== تبويب الامتحانات ========== */}
         {activeTab === 'exams' && (
-          <div className="space-y-4">
+          <div className="space-y-6">
+            {isSuperAdmin && (
+              <div className="bg-white p-4 rounded-xl shadow-sm border flex flex-wrap items-center gap-4">
+                  <label className="font-medium">{language === 'ar' ? 'فلترة حسب:' : 'Filter by:'}</label>
+                  <select value={globalFilter.gradeId} onChange={e => setGlobalFilter(f => ({...f, gradeId: e.target.value, specializationId: '', subjectId: ''}))} className="p-2 border rounded-lg">
+                      <option value="">{language === 'ar' ? 'كل المراحل' : 'All Grades'}</option>
+                      {grades.map(g => <option key={g._id} value={g._id}>{g.name.ar}</option>)}
+                  </select>
+                  <select value={globalFilter.specializationId} onChange={e => setGlobalFilter(f => ({...f, specializationId: e.target.value, subjectId: ''}))} className="p-2 border rounded-lg" disabled={!globalFilter.gradeId}>
+                      <option value="">{language === 'ar' ? 'كل التخصصات' : 'All Specializations'}</option>
+                      {specializations.map(s => <option key={s._id} value={s._id}>{s.name.ar}</option>)}
+                  </select>
+                  <select value={globalFilter.subjectId} onChange={e => setGlobalFilter(f => ({...f, subjectId: e.target.value}))} className="p-2 border rounded-lg" disabled={!globalFilter.specializationId}>
+                      <option value="">{language === 'ar' ? 'كل المواد' : 'All Subjects'}</option>
+                      {subjects.map(s => <option key={s._id} value={s._id}>{s.name.ar}</option>)}
+                  </select>
+                  <button onClick={() => setGlobalFilter({gradeId: '', specializationId: '', subjectId: ''})} className="text-sm text-gray-600 hover:underline">
+                    {language === 'ar' ? 'إعادة تعيين' : 'Reset'}
+                  </button>
+              </div>
+            )}
+
             <div className="flex flex-wrap justify-between items-center gap-4">
               <div className="flex gap-2">
                 <button
@@ -821,9 +878,6 @@ const viewResultDetails = async (result: ExamResult) => {
                   </button>
                 )}
               </div>
-              <button onClick={() => handleExport('csv')} className="p-2 hover:bg-gray-100 rounded-lg">
-                <Download className="w-5 h-5" />
-              </button>
             </div>
             <div className="bg-white rounded-xl shadow overflow-hidden">
               <table className="w-full">
@@ -866,7 +920,7 @@ const viewResultDetails = async (result: ExamResult) => {
                       <td className="px-4 py-3">{getStatusBadge(exam.status)}</td>
                       <td className="px-4 py-3">
                         <div className="flex gap-1">
-                          <button onClick={() => router.push(`/admin/exams?edit=${exam._id}`)} className="p-2 hover:bg-indigo-50 text-indigo-600 rounded">
+                          <button onClick={() => alert('Edit functionality to be implemented in modal.')} className="p-2 hover:bg-indigo-50 text-indigo-600 rounded">
                             <Edit className="w-4 h-4" />
                           </button>
                           <button onClick={() => handleDelete('exam', exam._id)} className="p-2 hover:bg-red-50 text-red-600 rounded">
@@ -903,7 +957,29 @@ const viewResultDetails = async (result: ExamResult) => {
 
         {/* ========== تبويب النتائج ========== */}
         {activeTab === 'results' && (
-          <div className="space-y-4">
+          <div className="space-y-6">
+            {isSuperAdmin && resultsView === 'list' && (
+              <div className="bg-white p-4 rounded-xl shadow-sm border flex flex-wrap items-center gap-4">
+                  <label className="font-medium">{language === 'ar' ? 'فلترة حسب:' : 'Filter by:'}</label>
+                  <select value={globalFilter.gradeId} onChange={e => setGlobalFilter(f => ({...f, gradeId: e.target.value, specializationId: '', subjectId: ''}))} className="p-2 border rounded-lg">
+                      <option value="">{language === 'ar' ? 'كل المراحل' : 'All Grades'}</option>
+                      {grades.map(g => <option key={g._id} value={g._id}>{g.name.ar}</option>)}
+                  </select>
+                  <select value={globalFilter.specializationId} onChange={e => setGlobalFilter(f => ({...f, specializationId: e.target.value, subjectId: ''}))} className="p-2 border rounded-lg" disabled={!globalFilter.gradeId}>
+                      <option value="">{language === 'ar' ? 'كل التخصصات' : 'All Specializations'}</option>
+                      {specializations.map(s => <option key={s._id} value={s._id}>{s.name.ar}</option>)}
+                  </select>
+                  <select value={globalFilter.subjectId} onChange={e => setGlobalFilter(f => ({...f, subjectId: e.target.value}))} className="p-2 border rounded-lg" disabled={!globalFilter.specializationId}>
+                      <option value="">{language === 'ar' ? 'كل المواد' : 'All Subjects'}</option>
+                      {subjects.map(s => <option key={s._id} value={s._id}>{s.name.ar}</option>)}
+                  </select>
+                  <button onClick={() => setGlobalFilter({gradeId: '', specializationId: '', subjectId: ''})} className="text-sm text-gray-600 hover:underline">
+                    {language === 'ar' ? 'إعادة تعيين' : 'Reset'}
+                  </button>
+              </div>
+            )}
+
+
             {resultsView !== 'list' && (
               <div className="flex items-center gap-2 text-sm bg-white rounded-lg p-3 shadow-sm">
                 <button onClick={() => { setResultsView('list'); setSelectedSubject(null); setSelectedExam(null); }} className="text-indigo-600 hover:underline">
@@ -1127,11 +1203,26 @@ const viewResultDetails = async (result: ExamResult) => {
         )}
 
         {/* ========== تبويب المراقبة المباشرة ========== */}
-        {activeTab === 'monitor' && user?.email && (
-          <div>
+        {activeTab === 'monitor' && user?.email && isSuperAdmin && (
+          <div className="space-y-6">
+            <div className="bg-white p-4 rounded-xl shadow-sm border flex flex-wrap items-center gap-4">
+                <label className="font-medium">{language === 'ar' ? 'اختر الامتحان للمراقبة:' : 'Select Exam to Monitor:'}</label>
+                <select value={globalFilter.gradeId} onChange={e => setGlobalFilter(f => ({...f, gradeId: e.target.value, specializationId: '', subjectId: ''}))} className="p-2 border rounded-lg">
+                    <option value="">{language === 'ar' ? 'اختر المرحلة' : 'Select Grade'}</option>
+                    {grades.map(g => <option key={g._id} value={g._id}>{g.name.ar}</option>)}
+                </select>
+                <select value={globalFilter.specializationId} onChange={e => setGlobalFilter(f => ({...f, specializationId: e.target.value, subjectId: ''}))} className="p-2 border rounded-lg" disabled={!globalFilter.gradeId}>
+                    <option value="">{language === 'ar' ? 'اختر التخصص' : 'Select Specialization'}</option>
+                    {specializations.map(s => <option key={s._id} value={s._id}>{s.name.ar}</option>)}
+                </select>
+                <select onChange={(e) => setSelectedExam(exams.find(ex => ex._id === e.target.value) || null)} className="p-2 border rounded-lg" disabled={!globalFilter.specializationId}>
+                    <option value="">{language === 'ar' ? 'اختر الامتحان' : 'Select Exam'}</option>
+                    {exams.filter(e => e.subjectId === subjects[0]?._id).map(exam => <option key={exam._id} value={exam._id}>{exam.title.ar}</option>)}
+                </select>
+            </div>
             {/* Show Commander if an exam is selected or active */}
             {selectedExam && (
-               <ExamCommander 
+               <ExamCommander
                  examId={selectedExam._id} 
                  examTitle={language === 'ar' ? selectedExam.title.ar : selectedExam.title.en} 
                  adminEmail={user.email} 
@@ -1141,12 +1232,100 @@ const viewResultDetails = async (result: ExamResult) => {
           </div>
         )}
 
-        {/* ========== تبويب المسؤولين ========== */}
-        {activeTab === 'admins' && isSuperAdmin && (
-          <div className="bg-white rounded-xl shadow p-6">
-            <h2 className="text-lg font-semibold mb-4">{language === 'ar' ? 'إدارة المسؤولين' : 'Manage Admins'}</h2>
-            <p className="text-gray-600">{language === 'ar' ? 'سيتم تفعيل هذه الميزة قريباً. يمكنك هنا إضافة أو إزالة المسؤولين الفرعيين.' : 'This feature will be enabled soon. Here you can add or remove sub-admins.'}</p>
+        {/* ========== تبويب إدارة النظام ========== */}
+        {activeTab === 'management' && isSuperAdmin && (
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            {/* Admins/Teachers */}
+            <div className="lg:col-span-2 bg-white rounded-xl shadow p-6">
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="font-bold text-lg flex items-center gap-2"><Users /> {language === 'ar' ? 'إدارة المعلمين' : 'Manage Teachers'}</h3>
+                <button className="flex items-center gap-2 px-3 py-2 bg-indigo-600 text-white rounded-lg text-sm"><UserPlus className="w-4 h-4" /> {language === 'ar' ? 'إضافة معلم' : 'Add Teacher'}</button>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="text-left bg-gray-50"><tr><th className="p-2">Name</th><th className="p-2">Email</th><th className="p-2">Assignments</th><th className="p-2">Actions</th></tr></thead>
+                  <tbody>{adminUsers.map(u => <tr key={u._id} className="border-b"><td className="p-2">{u.name}</td><td className="p-2">{u.email}</td><td className="p-2">{u.assignments.length} classes</td><td className="p-2"><button><Edit className="w-4 h-4" /></button></td></tr>)}</tbody>
+                </table>
+              </div>
+            </div>
+            {/* Students */}
+            <div className="lg:col-span-2 bg-white rounded-xl shadow p-6">
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="font-bold text-lg flex items-center gap-2"><GraduationCap /> {language === 'ar' ? 'إدارة الطلاب' : 'Manage Students'}</h3>
+                <button className="flex items-center gap-2 px-3 py-2 bg-indigo-600 text-white rounded-lg text-sm"><UserPlus className="w-4 h-4" /> {language === 'ar' ? 'إضافة طالب' : 'Add Student'}</button>
+              </div>
+               <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="text-left bg-gray-50"><tr><th className="p-2">Name</th><th className="p-2">Email</th><th className="p-2">Class</th><th className="p-2">Actions</th></tr></thead>
+                  <tbody>{students.map(s => <tr key={s._id} className="border-b"><td className="p-2">{s.name}</td><td className="p-2">{s.email}</td><td className="p-2">{grades.find(g=>g._id === s.gradeId)?.name.ar} - {specializations.find(sp=>sp._id === s.specializationId)?.name.ar}</td><td className="p-2"><button><Edit className="w-4 h-4" /></button></td></tr>)}</tbody>
+                </table>
+              </div>
+            </div>
+            {/* Grades & Specializations */}
+            <div className="space-y-6">
+              <div className="bg-white rounded-xl shadow p-6">
+                <div className="flex justify-between items-center mb-4">
+                  <h3 className="font-bold text-lg flex items-center gap-2"><Briefcase /> {language === 'ar' ? 'التخصصات' : 'Specializations'}</h3>
+                  <button className="p-2 bg-gray-100 rounded-lg"><Plus className="w-4 h-4" /></button>
+                </div>
+                <ul className="space-y-2">{specializations.map(s => <li key={s._id} className="p-2 bg-gray-50 rounded">{s.name.ar}</li>)}</ul>
+              </div>
+              <div className="bg-white rounded-xl shadow p-6">
+                <div className="flex justify-between items-center mb-4">
+                  <h3 className="font-bold text-lg flex items-center gap-2"><Calendar /> {language === 'ar' ? 'المراحل' : 'Grades'}</h3>
+                  <button className="p-2 bg-gray-100 rounded-lg"><Plus className="w-4 h-4" /></button>
+                </div>
+                <ul className="space-y-2">{grades.map(g => <li key={g._id} className="p-2 bg-gray-50 rounded">{g.name.ar}</li>)}</ul>
+              </div>
+            </div>
           </div>
+        )}
+
+        {/* ========== تبويب الملف الشخصي ========== */}
+        {activeTab === 'profile' && (
+            <div className="bg-white rounded-xl shadow p-8 max-w-2xl mx-auto">
+              <h2 className="text-2xl font-bold mb-6">{language === 'ar' ? 'الملف الشخصي' : 'Profile'}</h2>
+              <div className="flex items-center gap-6 mb-6">
+                <img src={profile.avatar || `https://ui-avatars.com/api/?name=${profile.name}&background=random`} alt="Avatar" className="w-24 h-24 rounded-full object-cover" />
+                <div>
+                  <h3 className="text-xl font-bold">{profile.name}</h3>
+                  <p className="text-gray-600">{user?.email}</p>
+                </div>
+              </div>
+              <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); alert('Profile Saved (Simulation)'); }}>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium mb-1">{language === 'ar' ? 'الاسم الكامل' : 'Full Name'}</label>
+                    <input type="text" value={profile.name} onChange={e => setProfile(p => ({...p, name: e.target.value}))} className="w-full p-2 border rounded-lg" />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-1">{language === 'ar' ? 'رقم الهاتف' : 'Phone Number'}</label>
+                    <input type="tel" value={profile.phone} onChange={e => setProfile(p => ({...p, phone: e.target.value}))} className="w-full p-2 border rounded-lg" />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">{language === 'ar' ? 'رقم الهوية' : 'National ID'}</label>
+                  <input type="text" value={profile.nationalId} onChange={e => setProfile(p => ({...p, nationalId: e.target.value}))} className="w-full p-2 border rounded-lg" />
+                </div>
+                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium mb-1">{language === 'ar' ? 'رابط تويتر' : 'Twitter URL'}</label>
+                    <input type="url" value={profile.socials.twitter} onChange={e => setProfile(p => ({...p, socials: {...p.socials, twitter: e.target.value}}))} className="w-full p-2 border rounded-lg" />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-1">{language === 'ar' ? 'رابط لينكدإن' : 'LinkedIn URL'}</label>
+                    <input type="url" value={profile.socials.linkedin} onChange={e => setProfile(p => ({...p, socials: {...p.socials, linkedin: e.target.value}}))} className="w-full p-2 border rounded-lg" />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">{language === 'ar' ? 'رابط الصورة الشخصية' : 'Avatar URL'}</label>
+                  <input type="url" value={profile.avatar} onChange={e => setProfile(p => ({...p, avatar: e.target.value}))} className="w-full p-2 border rounded-lg" />
+                </div>
+                <div className="flex justify-end pt-4">
+                  <button type="submit" className="px-6 py-2 bg-indigo-600 text-white rounded-lg font-bold">{language === 'ar' ? 'حفظ التغييرات' : 'Save Changes'}</button>
+                </div>
+              </form>
+            </div>
         )}
 
         {/* ========== تبويب التواصل (الجديد) ========== */}
@@ -1168,7 +1347,7 @@ const viewResultDetails = async (result: ExamResult) => {
             </div>
 
             {commTab === 'inbox' ? (
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 h-[600px]">
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 h-150">
                 {/* قائمة المحادثات */}
                 <div className="border rounded-xl overflow-hidden flex flex-col">
                   <div className="p-4 bg-gray-50 border-b">
@@ -1200,7 +1379,7 @@ const viewResultDetails = async (result: ExamResult) => {
                     </div>
                   </div>
                   <div className="p-4 bg-white border-t">
-                    <ReactQuill theme="snow" value={replyText} onChange={setReplyText} className="mb-4 h-24" />
+                    <ReactQuill theme="snow" value={replyText} onChange={setReplyText} modules={quillModules} className="mb-4 h-24" />
                     <div className="flex justify-end mt-8">
                       <button className="px-4 py-2 bg-indigo-600 text-white rounded-lg flex items-center gap-2">
                         <Send className="w-4 h-4" /> {language === 'ar' ? 'إرسال' : 'Send'}
@@ -1212,8 +1391,21 @@ const viewResultDetails = async (result: ExamResult) => {
             ) : (
               <div className="space-y-6">
                 <div>
-                  <label className="block font-medium mb-2">{language === 'ar' ? 'نص التعميم' : 'Announcement Text'}</label>
-                  <ReactQuill theme="snow" value={announcementText} onChange={setAnnouncementText} className="h-40 mb-12" />
+                  <label className="block font-medium mb-2">{language === 'ar' ? 'إرسال إلى' : 'Send To'}</label>
+                  <div className="flex gap-4">
+                    <select className="p-2 border rounded-lg">
+                      <option value="all">{language === 'ar' ? 'الكل' : 'All'}</option>
+                      {grades.map(g => <option key={g._id} value={g._id}>{g.name.ar}</option>)}
+                    </select>
+                     <select className="p-2 border rounded-lg">
+                      <option value="all">{language === 'ar' ? 'كل التخصصات' : 'All Specializations'}</option>
+                      {specializations.map(s => <option key={s._id} value={s._id}>{s.name.ar}</option>)}
+                    </select>
+                  </div>
+                </div>
+                <div>
+                  <label className="block font-medium mb-2 mt-4">{language === 'ar' ? 'نص التعميم' : 'Announcement Text'}</label>
+                  <ReactQuill theme="snow" value={announcementText} onChange={setAnnouncementText} modules={quillModules} className="h-40 mb-12" />
                 </div>
                 <div className="flex justify-end">
                   <button className="px-6 py-2 bg-indigo-600 text-white rounded-lg flex items-center gap-2">
@@ -1222,27 +1414,6 @@ const viewResultDetails = async (result: ExamResult) => {
                 </div>
               </div>
             )}
-          </div>
-        )}
-
-        {/* ========== تبويب الإعدادات ========== */}
-        {activeTab === 'settings' && (
-          <div className="bg-white rounded-xl shadow p-6">
-            <h2 className="text-lg font-semibold mb-4">{language === 'ar' ? 'إعدادات النظام' : 'System Settings'}</h2>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm text-gray-700 mb-2">{language === 'ar' ? 'إيميلات الأدمن' : 'Admin Emails'}</label>
-                <input type="text" value={process.env.NEXT_PUBLIC_ADMIN_EMAILS || ''} disabled className="w-full px-4 py-2 border rounded-lg bg-gray-100" />
-                <p className="text-xs text-gray-500 mt-1">{language === 'ar' ? 'يتم تعديلها في ملف .env' : 'Edit in .env file'}</p>
-              </div>
-              <div>
-                <label className="block text-sm text-gray-700 mb-2">{language === 'ar' ? 'لغة الواجهة' : 'Interface Language'}</label>
-                <select className="w-full px-4 py-2 border rounded-lg">
-                  <option value="ar">🇸🇦 العربية</option>
-                  <option value="en">🇬🇧 English</option>
-                </select>
-              </div>
-            </div>
           </div>
         )}
 
