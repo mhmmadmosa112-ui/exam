@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import dynamic from 'next/dynamic';
 import { auth } from '@/lib/firebase';
@@ -8,7 +8,7 @@ import { useAuthState } from 'react-firebase-hooks/auth';
 import { useLanguage } from '@/context/LanguageContext';
 import Header from '@/components/Header';
 import {
-  Users, Award, Download, Search, Edit, Trash2, CheckCircle, UserPlus, GraduationCap, Briefcase,
+  Users, Award, Download, Search, Edit, Trash2, CheckCircle, UserPlus, GraduationCap, Briefcase, Upload, Check,
   XCircle, ArrowLeft, BarChart3, Eye, X, FileText, Video, Link as LinkIcon, Image as ImageIcon,
   BookOpen, Settings, ChevronRight, Loader2, Plus, Sparkles,
   Save, Calendar, MessageSquare, Filter, Send, Megaphone, Paperclip
@@ -180,6 +180,7 @@ export default function AdminPage() {
 
   // ========== حالات إنشاء الامتحان (Merged from exams/page.tsx) ==========
   const [showExamModal, setShowExamModal] = useState(false);
+  const [previewMode, setPreviewMode] = useState(false);
   const [examForm, setExamForm] = useState<any>({
     title: { ar: '', en: '' },
     subjectId: '',
@@ -187,16 +188,49 @@ export default function AdminPage() {
     description: { ar: '', en: '' },
     settings: {
       duration: 30,
+      durationHours: 0,
+      durationMinutes: 30,
+      durationSeconds: 0,
       passingScore: 50,
       shuffleQuestions: true,
+      shuffleOptions: true,
       showResults: 'after-publish',
-      allowReview: true
+      allowReview: true,
+      allowBackNavigation: true,
+      timePerQuestion: false,
+      timePerQuestionSeconds: 60,
+      allowRetake: false,
+      startDate: undefined,
+      endDate: undefined
     },
     status: 'draft',
     availability: { assignedTo: 'all', classIds: [] }
   });
   const [questions, setQuestions] = useState<Question[]>([]);
   const [activeExamTab, setActiveExamTab] = useState<'manual' | 'ai'>('manual');
+  
+  // حالات الذكاء الاصطناعي
+  const [aiForm, setAiForm] = useState({
+    subjectId: '',
+    questionCount: 10,
+    questionTypes: ['multiple-choice', 'true-false'],
+    totalPoints: 100,
+    language: 'ar',
+    customInstructions: ''
+  });
+  const [pdfFile, setPdfFile] = useState<File | null>(null);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiResult, setAiResult] = useState<any>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // حالات إدارة المواد
+  const [showSubjectModal, setShowSubjectModal] = useState(false);
+  const [editingSubject, setEditingSubject] = useState<Subject | null>(null);
+  const [subjectForm, setSubjectForm] = useState({
+    name: { ar: '', en: '' },
+    code: '',
+    description: { ar: '', en: '' }
+  });
 
   // ========== حالات التواصل (Merged from exam/page.tsx - Communication) ==========
   const [commTab, setCommTab] = useState<'inbox' | 'announcements'>('inbox');
@@ -593,11 +627,166 @@ const viewResultDetails = async (result: ExamResult) => {
     setSelectAll(false);
   };
 
-  // ========== حفظ الامتحان (مبسط) ==========
-  const handleSaveExam = async (e: React.FormEvent) => {
+  // ========== حفظ الامتحان (كامل) ==========
+  const handleSubmitExam = async (e: React.FormEvent) => {
     e.preventDefault();
-    alert(language === 'ar' ? 'تم حفظ الامتحان (محاكاة)' : 'Exam Saved (Simulation)');
-    setShowExamModal(false);
+    if (!user?.email) return;
+    
+    const validQuestions = questions.filter(q =>
+      (q.text?.ar?.trim() || q.text?.en?.trim()) && q.points > 0
+    );
+    
+    if (validQuestions.length === 0) {
+      setError(language === 'ar' ? 'يرجى إضافة سؤال صالح واحد على الأقل' : 'Please add at least one valid question');
+      return;
+    }
+    
+    try {
+      const totalPoints = questions.reduce((sum, q) => sum + q.points, 0);
+      const payload = {
+        ...examForm,
+        settings: { ...examForm.settings, totalPoints },
+        questions: validQuestions
+      };
+      
+      const url = selectedExam 
+        ? `http://localhost:3001/api/exams/${selectedExam._id}`
+        : 'http://localhost:3001/api/exams';
+      
+      const method = selectedExam ? 'PATCH' : 'POST';
+      
+      const res = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json', 'x-user-email': user.email },
+        body: JSON.stringify(payload)
+      });
+      
+      const result = await res.json();
+      if (result.success) {
+        setShowExamModal(false);
+        fetchData();
+        setSuccessMsg(language === 'ar' ? 'تم حفظ الامتحان بنجاح' : 'Exam saved successfully');
+        setTimeout(() => setSuccessMsg(''), 3000);
+      } else {
+        setError(result.error || 'فشل الحفظ');
+      }
+    } catch (err: any) {
+      setError('فشل الاتصال بالسيرفر');
+    }
+  };
+
+  // ========== دوال إدارة الأسئلة المتقدمة ==========
+  const updateQuestion = (id: string, updates: Partial<Question>) => {
+    setQuestions(prev => prev.map(q => q.id === id ? { ...q, ...updates, text: { ...q.text, ...(updates.text || {}) } } : q));
+  };
+
+  const removeQuestion = (id: string) => {
+    setQuestions(prev => prev.filter(q => q.id !== id));
+  };
+
+  // ========== توليد بالذكاء الاصطناعي ==========
+  const handleAIGenerate = async () => {
+    if (!user?.email || !pdfFile || !aiForm.subjectId) {
+      setError(language === 'ar' ? 'يرجى اختيار مادة ورفع ملف PDF' : 'Please select subject and upload PDF');
+      return;
+    }
+    try {
+      setAiLoading(true);
+      const formData = new FormData();
+      formData.append('pdf', pdfFile);
+      formData.append('subjectId', aiForm.subjectId);
+      formData.append('questionCount', aiForm.questionCount.toString());
+      formData.append('questionTypes', JSON.stringify(aiForm.questionTypes));
+      formData.append('totalPoints', aiForm.totalPoints.toString());
+      formData.append('language', aiForm.language);
+      formData.append('customInstructions', aiForm.customInstructions);
+
+      const res = await fetch('http://localhost:3001/api/exams/generate-from-pdf', {
+        method: 'POST',
+        headers: { 'x-user-email': user.email },
+        body: formData
+      });
+      const result = await res.json();
+      if (result.success) {
+        setAiResult(result.data);
+        setQuestions(result.data.questions || []);
+        setExamForm((f: any) => ({ ...f, title: result.data.title || f.title, subjectId: result.data.subjectId || f.subjectId }));
+        setActiveExamTab('manual');
+      } else {
+        setError(result.error || 'فشل التوليد');
+      }
+    } catch (err) {
+      setError('فشل الاتصال');
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  // ========== حفظ المادة ==========
+  const handleSaveSubject = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user?.email) return;
+    try {
+      const url = editingSubject 
+        ? `http://localhost:3001/api/subjects/${editingSubject._id}`
+        : 'http://localhost:3001/api/subjects';
+      const method = editingSubject ? 'PATCH' : 'POST';
+      
+      const res = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json', 'x-user-email': user.email },
+        body: JSON.stringify(subjectForm)
+      });
+      const data = await res.json();
+      if (data.success) {
+        setSuccessMsg(language === 'ar' ? 'تم حفظ المادة بنجاح' : 'Subject saved successfully');
+        setShowSubjectModal(false);
+        fetchData();
+        setTimeout(() => setSuccessMsg(''), 3000);
+      } else {
+        setError(data.error || 'فشل حفظ المادة');
+      }
+    } catch (err) {
+      setError('فشل حفظ المادة');
+    }
+  };
+
+  // ========== فتح نافذة الامتحان ==========
+  const openExamModal = (exam?: Exam) => {
+    if (exam) {
+      setSelectedExam(exam);
+      // هنا يجب تعبئة examForm و questions من بيانات الامتحان
+      // للتبسيط سنفترض أن البيانات موجودة في exam
+      setExamForm({
+        title: exam.title,
+        subjectId: exam.subjectId,
+        type: exam.type,
+        status: exam.status,
+        settings: exam.settings || examForm.settings,
+        description: { ar: '', en: '' }, // تحتاج لجلبها من الباك إند إذا كانت موجودة
+        availability: { assignedTo: 'all', classIds: [] }
+      });
+      setQuestions(exam.questions || []);
+    } else {
+      setSelectedExam(null);
+      setExamForm({
+        title: { ar: '', en: '' },
+        subjectId: subjects[0]?._id || '',
+        type: 'custom',
+        description: { ar: '', en: '' },
+        settings: {
+          duration: 30,
+          passingScore: 50,
+          shuffleQuestions: true,
+          showResults: 'after-publish',
+          allowReview: true
+        },
+        status: 'draft',
+        availability: { assignedTo: 'all', classIds: [] }
+      });
+      setQuestions([]);
+    }
+    setShowExamModal(true);
   };
 
   // ========== شاشة التحميل ==========
@@ -864,7 +1053,7 @@ const viewResultDetails = async (result: ExamResult) => {
             <div className="flex flex-wrap justify-between items-center gap-4">
               <div className="flex gap-2">
                 <button
-                  onClick={() => setShowExamModal(true)}
+                  onClick={() => openExamModal()}
                   className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg"
                 >
                   <FileText className="w-4 h-4" /> {language === 'ar' ? 'إنشاء امتحان' : 'Create Exam'}
@@ -920,7 +1109,7 @@ const viewResultDetails = async (result: ExamResult) => {
                       <td className="px-4 py-3">{getStatusBadge(exam.status)}</td>
                       <td className="px-4 py-3">
                         <div className="flex gap-1">
-                          <button onClick={() => alert('Edit functionality to be implemented in modal.')} className="p-2 hover:bg-indigo-50 text-indigo-600 rounded">
+                          <button onClick={() => openExamModal(exam)} className="p-2 hover:bg-indigo-50 text-indigo-600 rounded">
                             <Edit className="w-4 h-4" />
                           </button>
                           <button onClick={() => handleDelete('exam', exam._id)} className="p-2 hover:bg-red-50 text-red-600 rounded">
@@ -1175,6 +1364,12 @@ const viewResultDetails = async (result: ExamResult) => {
           <div className="bg-white rounded-xl shadow p-6">
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-lg font-semibold">{language === 'ar' ? 'إدارة المواد' : 'Manage Subjects'}</h2>
+              <button 
+                onClick={() => { setEditingSubject(null); setSubjectForm({ name: { ar: '', en: '' }, code: '', description: { ar: '', en: '' } }); setShowSubjectModal(true); }}
+                className="flex items-center gap-2 px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm"
+              >
+                <Plus className="w-4 h-4" /> {language === 'ar' ? 'إضافة مادة' : 'Add Subject'}
+              </button>
               {selectedIds.size > 0 && (
                 <button onClick={() => handleBulkDelete('subject')} className="flex items-center gap-2 px-3 py-2 bg-red-600 hover:bg-red-700 text-white rounded text-sm">
                   <Trash2 className="w-4 h-4" /> {language === 'ar' ? `حذف (${selectedIds.size})` : `Delete (${selectedIds.size})`}
@@ -1192,7 +1387,7 @@ const viewResultDetails = async (result: ExamResult) => {
                     </div>
                   </div>
                   <div className="flex gap-2">
-                    <button className="p-2 hover:bg-indigo-50 text-indigo-600 rounded"><Edit className="w-4 h-4" /></button>
+                    <button onClick={() => { setEditingSubject(subject); setSubjectForm({ name: subject.name, code: subject.code || '', description: { ar: '', en: '' } }); setShowSubjectModal(true); }} className="p-2 hover:bg-indigo-50 text-indigo-600 rounded"><Edit className="w-4 h-4" /></button>
                     <button onClick={() => handleDelete('subject', subject._id)} className="p-2 hover:bg-red-50 text-red-600 rounded"><Trash2 className="w-4 h-4" /></button>
                   </div>
                 </div>
@@ -1420,21 +1615,196 @@ const viewResultDetails = async (result: ExamResult) => {
         {/* ========== نافذة إنشاء الامتحان (Modal) ========== */}
         {showExamModal && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-2xl shadow-xl w-full max-w-4xl max-h-[90vh] overflow-y-auto">
+            <div className="bg-white rounded-2xl shadow-xl w-full max-w-5xl max-h-[90vh] overflow-y-auto">
               <div className="p-6 border-b flex justify-between items-center sticky top-0 bg-white z-10">
-                <h2 className="text-xl font-bold">{language === 'ar' ? 'إنشاء امتحان جديد' : 'Create New Exam'}</h2>
+                <h2 className="text-xl font-bold">{selectedExam ? (language === 'ar' ? 'تعديل الامتحان' : 'Edit Exam') : (language === 'ar' ? 'إنشاء امتحان جديد' : 'Create New Exam')}</h2>
                 <button onClick={() => setShowExamModal(false)} className="p-2 hover:bg-gray-100 rounded-lg"><X className="w-5 h-5" /></button>
               </div>
-              <form onSubmit={handleSaveExam} className="p-6 space-y-6">
+              
+              {/* تبويبات: يدوي / AI */}
+              {!selectedExam && (
+                <div className="px-6 pt-4 border-b flex gap-2">
+                  <button onClick={() => setActiveExamTab('manual')} className={`px-4 py-2 rounded-lg font-medium ${activeExamTab === 'manual' ? 'bg-indigo-600 text-white' : 'bg-gray-100'}`}>✍️ {language === 'ar' ? 'يدوي' : 'Manual'}</button>
+                  <button onClick={() => setActiveExamTab('ai')} className={`px-4 py-2 rounded-lg font-medium ${activeExamTab === 'ai' ? 'bg-indigo-600 text-white' : 'bg-gray-100'}`}>🤖 {language === 'ar' ? 'ذكاء اصطناعي' : 'AI'}</button>
+                </div>
+              )}
+
+              <form onSubmit={handleSubmitExam} className="p-6 space-y-6">
+                {activeExamTab === 'manual' || selectedExam ? (
+                  <>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block font-bold mb-1">{language === 'ar' ? 'العنوان (عربي)' : 'Title (AR)'}</label>
+                        <input type="text" className="w-full border p-2 rounded" required value={examForm.title.ar} onChange={e => setExamForm({...examForm, title: {...examForm.title, ar: e.target.value}})} />
+                      </div>
+                      <div>
+                        <label className="block font-bold mb-1">{language === 'ar' ? 'العنوان (EN)' : 'Title (EN)'}</label>
+                        <input type="text" className="w-full border p-2 rounded" required value={examForm.title.en} onChange={e => setExamForm({...examForm, title: {...examForm.title, en: e.target.value}})} />
+                      </div>
+                      <div>
+                        <label className="block font-bold mb-1">{language === 'ar' ? 'المادة' : 'Subject'}</label>
+                        <select className="w-full border p-2 rounded" required value={examForm.subjectId} onChange={e => setExamForm({...examForm, subjectId: e.target.value})}>
+                          <option value="">{language === 'ar' ? 'اختر مادة' : 'Select Subject'}</option>
+                          {subjects.map(s => <option key={s._id} value={s._id}>{language === 'ar' ? s.name.ar : s.name.en}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block font-bold mb-1">{language === 'ar' ? 'الحالة' : 'Status'}</label>
+                        <select className="w-full border p-2 rounded" value={examForm.status} onChange={e => setExamForm({...examForm, status: e.target.value})}>
+                          <option value="draft">{language === 'ar' ? 'مسودة' : 'Draft'}</option>
+                          <option value="published">{language === 'ar' ? 'منشور' : 'Published'}</option>
+                          <option value="active">{language === 'ar' ? 'نشط' : 'Active'}</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    {/* إعدادات الامتحان */}
+                    <div className="bg-gray-50 p-4 rounded-xl border">
+                      <h3 className="font-bold mb-3 flex items-center gap-2"><Settings className="w-4 h-4" /> {language === 'ar' ? 'الإعدادات' : 'Settings'}</h3>
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        <div>
+                          <label className="block text-sm mb-1">{language === 'ar' ? 'المدة (دقيقة)' : 'Duration (min)'}</label>
+                          <input type="number" className="w-full border p-2 rounded" value={examForm.settings.duration} onChange={e => setExamForm({...examForm, settings: {...examForm.settings, duration: Number(e.target.value)}})} />
+                        </div>
+                        <div>
+                          <label className="block text-sm mb-1">{language === 'ar' ? 'درجة النجاح %' : 'Pass Score %'}</label>
+                          <input type="number" className="w-full border p-2 rounded" value={examForm.settings.passingScore} onChange={e => setExamForm({...examForm, settings: {...examForm.settings, passingScore: Number(e.target.value)}})} />
+                        </div>
+                        <div className="col-span-2 flex gap-4 items-center mt-6">
+                          <label className="flex items-center gap-2"><input type="checkbox" checked={examForm.settings.shuffleQuestions} onChange={e => setExamForm({...examForm, settings: {...examForm.settings, shuffleQuestions: e.target.checked}})} /> {language === 'ar' ? 'خلط الأسئلة' : 'Shuffle Qs'}</label>
+                          <label className="flex items-center gap-2"><input type="checkbox" checked={examForm.settings.allowReview} onChange={e => setExamForm({...examForm, settings: {...examForm.settings, allowReview: e.target.checked}})} /> {language === 'ar' ? 'السماح بالمراجعة' : 'Allow Review'}</label>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* إدارة الأسئلة */}
+                    <div>
+                      <div className="flex justify-between items-center mb-4">
+                        <h3 className="font-bold">{language === 'ar' ? `الأسئلة (${questions.length})` : `Questions (${questions.length})`}</h3>
+                        <div className="flex gap-2">
+                          <button type="button" onClick={() => addQuestion('multiple-choice')} className="px-3 py-1 bg-indigo-50 text-indigo-700 rounded text-sm">+ MCQ</button>
+                          <button type="button" onClick={() => addQuestion('true-false')} className="px-3 py-1 bg-green-50 text-green-700 rounded text-sm">+ T/F</button>
+                          <button type="button" onClick={() => addQuestion('essay')} className="px-3 py-1 bg-purple-50 text-purple-700 rounded text-sm">+ Essay</button>
+                        </div>
+                      </div>
+                      
+                      <div className="space-y-4 max-h-96 overflow-y-auto pr-2">
+                        {questions.map((q, idx) => (
+                          <div key={q.id} className="border rounded-xl p-4 bg-gray-50 relative">
+                            <button type="button" onClick={() => removeQuestion(q.id)} className="absolute top-2 right-2 text-red-500 hover:bg-red-50 p-1 rounded"><Trash2 className="w-4 h-4" /></button>
+                            <div className="mb-2">
+                              <span className="text-xs font-bold bg-gray-200 px-2 py-1 rounded mr-2">{q.type}</span>
+                              <span className="font-bold">{language === 'ar' ? `سؤال ${idx + 1}` : `Q ${idx + 1}`}</span>
+                            </div>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                              <ReactQuill value={q.text.ar} onChange={(val: string) => updateQuestion(q.id, { text: { ...q.text, ar: val } })} placeholder="Question (AR)" className="bg-white h-20 mb-8" />
+                              <ReactQuill value={q.text.en} onChange={(val: string) => updateQuestion(q.id, { text: { ...q.text, en: val } })} placeholder="Question (EN)" className="bg-white h-20 mb-8" />
+                            </div>
+                            
+                            {(q.type === 'multiple-choice' || q.type === 'true-false') && (
+                              <div className="space-y-2">
+                                {q.options?.map((opt, optIdx) => (
+                                  <div key={opt.id} className="flex items-center gap-2">
+                                    <input type="radio" name={`q-${q.id}`} checked={opt.isCorrect} onChange={() => {
+                                      const newOpts = q.options?.map(o => ({...o, isCorrect: o.id === opt.id}));
+                                      updateQuestion(q.id, { options: newOpts });
+                                    }} />
+                                    <input type="text" value={opt.text.ar} onChange={e => {
+                                      const newOpts = [...(q.options || [])];
+                                      newOpts[optIdx] = { ...opt, text: { ...opt.text, ar: e.target.value } };
+                                      updateQuestion(q.id, { options: newOpts });
+                                    }} className="border p-1 rounded flex-1" placeholder="Option (AR)" />
+                                    <input type="text" value={opt.text.en} onChange={e => {
+                                      const newOpts = [...(q.options || [])];
+                                      newOpts[optIdx] = { ...opt, text: { ...opt.text, en: e.target.value } };
+                                      updateQuestion(q.id, { options: newOpts });
+                                    }} className="border p-1 rounded flex-1" placeholder="Option (EN)" />
+                                  </div>
+                                ))}
+                                <button type="button" onClick={() => {
+                                  const newOpts = [...(q.options || []), { id: crypto.randomUUID(), text: { ar: '', en: '' }, isCorrect: false }];
+                                  updateQuestion(q.id, { options: newOpts });
+                                }} className="text-xs text-indigo-600 hover:underline">+ {language === 'ar' ? 'إضافة خيار' : 'Add Option'}</button>
+                              </div>
+                            )}
+                            
+                            <div className="mt-2 flex items-center gap-2">
+                              <label className="text-sm">{language === 'ar' ? 'الدرجة:' : 'Points:'}</label>
+                              <input type="number" value={q.points} onChange={e => updateQuestion(q.id, { points: Number(e.target.value) })} className="w-16 border p-1 rounded" />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="flex gap-2 pt-4 border-t">
+                      <button type="button" onClick={() => setShowExamModal(false)} className="flex-1 py-2 bg-gray-200 rounded-lg">{language === 'ar' ? 'إلغاء' : 'Cancel'}</button>
+                      <button type="submit" className="flex-1 py-2 bg-indigo-600 text-white rounded-lg font-bold">{language === 'ar' ? 'حفظ الامتحان' : 'Save Exam'}</button>
+                    </div>
+                  </>
+                ) : (
+                  // واجهة الذكاء الاصطناعي
+                  <div className="space-y-6">
+                    <div className="bg-indigo-50 p-4 rounded-xl border border-indigo-200">
+                      <h3 className="font-bold text-indigo-900 flex items-center gap-2"><Sparkles className="w-5 h-5" /> {language === 'ar' ? 'توليد من PDF' : 'Generate from PDF'}</h3>
+                      <p className="text-sm text-indigo-700 mt-1">{language === 'ar' ? 'ارفع ملفاً وسيقوم الذكاء الاصطناعي بإنشاء الأسئلة.' : 'Upload a PDF and AI will generate questions.'}</p>
+                    </div>
+                    
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block font-bold mb-1">{language === 'ar' ? 'المادة' : 'Subject'}</label>
+                        <select className="w-full border p-2 rounded" value={aiForm.subjectId} onChange={e => setAiForm({...aiForm, subjectId: e.target.value})}>
+                          <option value="">{language === 'ar' ? 'اختر مادة' : 'Select Subject'}</option>
+                          {subjects.map(s => <option key={s._id} value={s._id}>{language === 'ar' ? s.name.ar : s.name.en}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block font-bold mb-1">{language === 'ar' ? 'عدد الأسئلة' : 'Question Count'}</label>
+                        <input type="number" className="w-full border p-2 rounded" value={aiForm.questionCount} onChange={e => setAiForm({...aiForm, questionCount: Number(e.target.value)})} />
+                      </div>
+                    </div>
+
+                    <div className="border-2 border-dashed border-gray-300 rounded-xl p-8 text-center cursor-pointer hover:border-indigo-500 transition-colors" onClick={() => fileInputRef.current?.click()}>
+                      <input ref={fileInputRef} type="file" accept=".pdf" className="hidden" onChange={e => setPdfFile(e.target.files?.[0] || null)} />
+                      <Upload className="w-10 h-10 text-gray-400 mx-auto mb-2" />
+                      <p className="text-gray-600">{pdfFile ? pdfFile.name : (language === 'ar' ? 'اضغط لرفع ملف PDF' : 'Click to upload PDF')}</p>
+                    </div>
+
+                    <button type="button" onClick={handleAIGenerate} disabled={aiLoading || !pdfFile} className="w-full py-3 bg-indigo-600 text-white rounded-lg font-bold disabled:bg-gray-400 flex justify-center items-center gap-2">
+                      {aiLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Sparkles className="w-5 h-5" />}
+                      {language === 'ar' ? 'توليد الأسئلة' : 'Generate Questions'}
+                    </button>
+                  </div>
+                )}
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* ========== نافذة إضافة مادة (Subject Modal) ========== */}
+        {showSubjectModal && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6">
+              <div className="flex justify-between items-center mb-6">
+                <h2 className="text-xl font-bold">{editingSubject ? (language === 'ar' ? 'تعديل مادة' : 'Edit Subject') : (language === 'ar' ? 'إضافة مادة جديدة' : 'Add New Subject')}</h2>
+                <button onClick={() => setShowSubjectModal(false)} className="p-2 hover:bg-gray-100 rounded-lg"><X className="w-5 h-5" /></button>
+              </div>
+              <form onSubmit={handleSaveSubject} className="space-y-4">
                 <div>
-                  <label className="block font-bold mb-1">{language === 'ar' ? 'عنوان الامتحان' : 'Exam Title'}</label>
-                  <input type="text" className="w-full border p-2 rounded" required value={examForm.title.ar} onChange={e => setExamForm({...examForm, title: {...examForm.title, ar: e.target.value}})} />
+                  <label className="block text-sm font-bold mb-1">{language === 'ar' ? 'اسم المادة (عربي)' : 'Name (Arabic)'}</label>
+                  <input type="text" required className="w-full border p-2 rounded" value={subjectForm.name.ar} onChange={e => setSubjectForm({...subjectForm, name: {...subjectForm.name, ar: e.target.value}})} />
                 </div>
-                {/* ... باقي حقول الفورم يمكن إضافتها هنا بنفس الطريقة ... */}
-                <div className="p-4 bg-yellow-50 text-yellow-800 rounded">
-                  {language === 'ar' ? 'تم دمج نموذج إنشاء الامتحان هنا.' : 'Exam creation form merged here.'}
+                <div>
+                  <label className="block text-sm font-bold mb-1">{language === 'ar' ? 'اسم المادة (إنجليزي)' : 'Name (English)'}</label>
+                  <input type="text" required className="w-full border p-2 rounded" value={subjectForm.name.en} onChange={e => setSubjectForm({...subjectForm, name: {...subjectForm.name, en: e.target.value}})} />
                 </div>
-                <button type="submit" className="w-full bg-indigo-600 text-white py-2 rounded font-bold">{language === 'ar' ? 'حفظ' : 'Save'}</button>
+                <div>
+                  <label className="block text-sm font-bold mb-1">{language === 'ar' ? 'رمز المادة' : 'Code'}</label>
+                  <input type="text" className="w-full border p-2 rounded" value={subjectForm.code} onChange={e => setSubjectForm({...subjectForm, code: e.target.value})} />
+                </div>
+                <button type="submit" className="w-full bg-indigo-600 text-white py-2 rounded font-bold hover:bg-indigo-700">
+                  {language === 'ar' ? 'حفظ' : 'Save'}
+                </button>
               </form>
             </div>
           </div>
