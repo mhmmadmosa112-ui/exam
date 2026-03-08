@@ -2,16 +2,25 @@
 
 import { useEffect, useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
+import dynamic from 'next/dynamic';
+import 'react-quill/dist/quill.snow.css';
 import { auth } from '@/lib/firebase';
 import { useAuthState } from 'react-firebase-hooks/auth';
 import { useLanguage } from '@/context/LanguageContext';
 import Header from '@/components/Header';
 import {
-  Plus, Edit, Trash2, Search, X, Check, BookOpen, Upload,
-  Sparkles, Save, Eye, Settings, ChevronDown, ChevronUp,
-  Calendar, Users, Award, Download, Filter, BarChart3, 
-  CheckCircle, XCircle, ArrowLeft
+    Plus, Edit, Trash2, Search, X, Check, BookOpen, Upload,
+    Sparkles, Save, Eye, Settings, ChevronDown, ChevronUp,
+    Calendar, Users, Award, Download, Filter, BarChart3,
+    CheckCircle, XCircle, ArrowLeft
 } from 'lucide-react';
+import 'react-quill/dist/quill.snow.css';
+// ✅ تعريف المحرر هنا (خارج الدالة) هو أهم خطوة لحل إيرور findDOMNode
+const ReactQuill = dynamic(() => import('react-quill') as any, {
+  ssr: false,
+  loading: () => <div className="h-20 bg-gray-50 animate-pulse rounded-lg border border-gray-200" />
+}) as any;
+
 interface Subject {
   _id: string;
   name: { ar: string; en: string };
@@ -90,20 +99,22 @@ export default function AdminExamsPage() {
   const [user, loading] = useAuthState(auth);
   const router = useRouter();
   const { language, t, dir } = useLanguage();
-  
+
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [exams, setExams] = useState<Exam[]>([]);
+  // ✅ أضف هذا السطر ضروري جداً لتخزين الأسئلة
+  const [questions, setQuestions] = useState<Question[]>([]); 
+  
   const [loadingData, setLoadingData] = useState(true);
   const [error, setError] = useState('');
-  
+
   // حالة النافذة المنبثقة
   const [showModal, setShowModal] = useState(false);
   const [editingExam, setEditingExam] = useState<Exam | null>(null);
   const [activeTab, setActiveTab] = useState<'manual' | 'ai'>('manual');
   const [previewMode, setPreviewMode] = useState(false);
-  
   // نموذج الامتحان اليدوي
-// ✅ نموذج الامتحان اليدوي - تهيئة صحيحة
+// ✅ نموذج الامتحان اليدوي - تهيئة صحيحة\
 // ✅ نموذج الامتحان اليدوي - تهيئة صحيحة
 const [examForm, setExamForm] = useState<ExamForm>({
   title: { ar: '', en: '' },
@@ -151,10 +162,9 @@ const [theme, setTheme] = useState<any>({
 });
 const [adminUsers, setAdminUsers] = useState<any[]>([]);
 const [students, setStudents] = useState<any[]>([]);
-  const [questions, setQuestions] = useState<Question[]>([]);
   
+
   // نموذج الـ AI
-// نموذج الـ AI
 const [aiForm, setAiForm] = useState({
   subjectId: '',
   questionCount: 10,
@@ -162,7 +172,7 @@ const [aiForm, setAiForm] = useState({
   totalPoints: 100,
   language: 'ar' as 'ar' | 'en',
   customInstructions: ''  // ✅ أضف هذا الحقل
-});
+  });
   const [pdfFile, setPdfFile] = useState<File | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiResult, setAiResult] = useState<any>(null);
@@ -177,11 +187,11 @@ const [aiForm, setAiForm] = useState({
         router.push('/dashboard');
       }
     }
-  }, [user, loading, router]);
+  }, [user, loading, router, isSuperAdmin]);
 
   // جلب البيانات
   const fetchData = async () => {
-    if (!user?.email) return;
+    if (!user?.email) return
     
     try {
       setLoadingData(true);
@@ -222,7 +232,7 @@ if (subjectsData.success) setSubjects(subjectsData.data);
         } catch {}
       }
       
-    } catch (err: any) {
+    } catch (err) {
       setError('فشل جلب البيانات');
     } finally {
       setLoadingData(false);
@@ -230,8 +240,9 @@ if (subjectsData.success) setSubjects(subjectsData.data);
   };
 
   useEffect(() => { fetchData(); }, [user]);
-
+  
 const openModal = async (exam?: Exam, isPreview = false) => {
+  
   setPreviewMode(isPreview);
   setActiveTab('manual');
   
@@ -437,6 +448,7 @@ const updateQuestion = (id: string, updates: Partial<Question>) => {
     setQuestions(questions.filter(q => q.id !== id));
   };
 
+
   // حفظ الامتحان يدوياً
 // حفظ الامتحان يدوياً - مع تشخيص مفصل
 const handleSubmit = async (e: React.FormEvent) => {
@@ -547,6 +559,7 @@ const handleSubmit = async (e: React.FormEvent) => {
   }
 };
 
+
   // توليد امتحان بالـ AI من PDF
 // توليد امتحان بالـ AI من PDF - مع تشخيص
 const handleAIGenerate = async () => {
@@ -567,7 +580,7 @@ const handleAIGenerate = async () => {
     formData.append('questionTypes', JSON.stringify(aiForm.questionTypes));
     formData.append('totalPoints', aiForm.totalPoints.toString());
     formData.append('language', aiForm.language);
-formData.append('customInstructions', aiForm.customInstructions);  // ✅ أضف هذا
+    formData.append('customInstructions', aiForm.customInstructions);  // ✅ أضف هذا
 
     console.log('📤 FormData entries:');
     for (let [key, value] of formData.entries()) {
@@ -1745,25 +1758,43 @@ ${language === 'ar' ? 'نقاط الضعف:' : 'Weaknesses:'} ${grading.weakness
         </div>
 
         {/* نص السؤال */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
-          <input
-            type="text"
-            placeholder={language === 'ar' ? 'نص السؤال (عربي)' : 'Question text (Arabic)'}
-            value={q.text.ar}
-            onChange={(e) => updateQuestion(q.id, { text: { ...q.text, ar: e.target.value } })}
-            className="px-3 py-2 border-2 border-gray-400 rounded-lg text-gray-900 font-semibold placeholder-gray-500"
-          />
-          <input
-            type="text"
-            placeholder="Question text (English)"
-            value={q.text.en}
-            onChange={(e) => updateQuestion(q.id, { text: { ...q.text, en: e.target.value } })}
-            className="px-3 py-2 border-2 border-gray-400 rounded-lg text-gray-900 font-semibold placeholder-gray-500"
-          />
+<div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
+  {/* عربي */}
+  <div>
+    <label className="block text-sm font-semibold text-black mb-1">
+      {language === 'ar' ? 'نص السؤال (عربي)' : 'Question Text (Arabic)'}
+    </label>
+    <div className="min-h-37.5">
+      <ReactQuill
+        value={q.text.ar}
+        onChange={(content: string) => updateQuestion(q.id, { text: { ...q.text, ar: content } })}
+        placeholder={language === 'ar' ? 'أدخل نص السؤال بالعربي' : 'Enter question text in Arabic'}
+        className="bg-white"
+      />
+    </div>
+  </div>
+
+  {/* انجليزي */}
+  <div>
+    <label className="block text-sm font-semibold text-black mb-1">
+      {language === 'ar' ? 'نص السؤال (إنجليزي)' : 'Question Text (English)'}
+    </label>
+    <div className="min-h-37.5">
+      <ReactQuill
+        value={q.text.en}
+        onChange={(content: string) => updateQuestion(q.id, { text: { ...q.text, en: content } })}
+        placeholder={language === 'ar' ? 'أدخل نص السؤال بالانجليزي' : 'Enter question text in English'}
+        className="bg-white"
+      />
+    </div>
+  </div>
         </div>
 
         {/* الخيارات لـ MCQ و True/False */}
 {/* الخيارات لـ MCQ و True/False */}
+
+
+
 {(q.type === 'multiple-choice' || q.type === 'true-false') && q.options && (
   <div className="space-y-2 mb-3">
     {q.options.map((opt, optIndex) => (
