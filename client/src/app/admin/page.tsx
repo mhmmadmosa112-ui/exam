@@ -60,6 +60,7 @@ interface Exam {
   status: string;
   questions?: any[];
   settings?: any;
+  availability?: any;
 }
 
 interface Question {
@@ -110,6 +111,12 @@ interface Subject {
   _id: string;
   name: { ar: string; en: string };
   code?: string;
+}
+interface NewEntityForm {
+  name: { ar: string; en: string };
+  email?: string;
+  password?: string;
+  // Add other fields as needed for different entities
 }
 
 interface Stats {
@@ -231,6 +238,16 @@ export default function AdminPage() {
     code: '',
     description: { ar: '', en: '' }
   });
+  const [showAdminModal, setShowAdminModal] = useState(false);
+  const [showStudentModal, setShowStudentModal] = useState(false);
+  const [showGradeModal, setShowGradeModal] = useState(false);
+  const [showSpecializationModal, setShowSpecializationModal] = useState(false);
+  const [editingEntity, setEditingEntity] = useState<any | null>(null);
+  const [entityForm, setEntityForm] = useState<NewEntityForm>({ name: { ar: '', en: '' } });
+  const [adminAssignments, setAdminAssignments] = useState<any[]>([]);
+  const [studentAssignment, setStudentAssignment] = useState({ gradeId: '', specializationId: '' });
+
+
 
   // ========== حالات التواصل (Merged from exam/page.tsx - Communication) ==========
   const [commTab, setCommTab] = useState<'inbox' | 'announcements'>('inbox');
@@ -238,8 +255,11 @@ export default function AdminPage() {
   const [announcementText, setAnnouncementText] = useState('');
 
   // ========== Quill Modules (with Image and Link) ==========
+  const questionQuillRef = useRef<any>(null);
   const quillModules = useMemo(() => {
     const imageHandler = () => {
+      const editor = questionQuillRef.current?.getEditor();
+      if (!editor) return;
       const input = document.createElement('input');
       input.setAttribute('type', 'file');
       input.setAttribute('accept', 'image/*');
@@ -250,8 +270,8 @@ export default function AdminPage() {
           // In a real app, upload to server. Here we use Base64 for immediate preview.
           const reader = new FileReader();
           reader.onload = () => {
-            const range = (window as any).quillRef?.getEditor().getSelection(true);
-            (window as any).quillRef?.getEditor().insertEmbed(range.index, 'image', reader.result);
+            const range = editor.getSelection(true);
+            editor.insertEmbed(range.index, 'image', reader.result);
           };
           reader.readAsDataURL(file);
         }
@@ -272,6 +292,44 @@ export default function AdminPage() {
     };
   }, []);
 
+  const replyQuillRef = useRef<any>(null);
+  const announcementQuillRef = useRef<any>(null);
+
+  const createCommModules = (ref: React.RefObject<any>) => ({
+      toolbar: {
+        container: [
+          [{ 'header': [1, 2, false] }],
+          ['bold', 'italic', 'underline', 'strike'],
+          [{ 'list': 'ordered'}, { 'list': 'bullet' }],
+          ['link', 'image'],
+          ['clean']
+        ],
+        handlers: { 
+          image: () => {
+            const input = document.createElement('input');
+            input.setAttribute('type', 'file');
+            input.setAttribute('accept', 'image/*');
+            input.click();
+            input.onchange = () => {
+              const file = input.files?.[0];
+              if (file) {
+                const reader = new FileReader();
+                reader.onload = () => {
+                  const editor = ref.current?.getEditor();
+                  if (editor) {
+                    const range = editor.getSelection(true);
+                    editor.insertEmbed(range.index, 'image', reader.result);
+                  }
+                };
+                reader.readAsDataURL(file);
+              }
+            };
+          }
+        },
+      },
+  });
+  const replyModules = useMemo(() => createCommModules(replyQuillRef), []);
+  const announcementModules = useMemo(() => createCommModules(announcementQuillRef), []);
   // ========== التحقق من صلاحية الأدمن ==========
   useEffect(() => {
     if (!loading && user) {
@@ -287,6 +345,28 @@ export default function AdminPage() {
     }
   }, [user, loading, router]);
 
+  const filteredResults = useMemo(() => {
+    return results
+      .filter(result => {
+        const searchLower = searchTerm.toLowerCase();
+        const nameMatch = result.userName.toLowerCase().includes(searchLower);
+        const emailMatch = result.userEmail.toLowerCase().includes(searchLower);
+        return nameMatch || emailMatch;
+      })
+      .filter(result => {
+        if (statusFilter === 'all') return true;
+        if (statusFilter === 'reviewed') return result.isReviewed;
+        if (statusFilter === 'pending') return !result.isReviewed;
+        return true;
+      })
+      .filter(result => {
+        if (resultsView === 'by-subject' && selectedSubject) {
+          const exam = exams.find(e => e._id === result.examId);
+          return exam?.subjectId === selectedSubject._id;
+        }
+        return true;
+      });
+  }, [results, searchTerm, statusFilter, resultsView, selectedSubject, exams]);
   // ========== جلب البيانات ==========
   const fetchData = useCallback(async () => {
     if (!user?.email) return;
@@ -612,6 +692,7 @@ const viewResultDetails = async (result: ExamResult) => {
   const handleSubjectClick = (subject: Subject) => { 
     setSelectedSubject(subject); 
     setSelectedExam(null); 
+    setActiveTab('results');
     setResultsView('by-subject'); 
   };
   
@@ -623,13 +704,13 @@ const viewResultDetails = async (result: ExamResult) => {
   const handleBack = () => {
     if (resultsView === 'student-details') { 
       setViewingDetails(null); 
-      setResultsView(selectedExam ? 'by-exam' : selectedSubject ? 'by-subject' : 'list'); 
+      setResultsView(selectedExam ? 'by-exam' : 'list'); 
     } else if (resultsView === 'by-exam') { 
       setSelectedExam(null); 
-      setResultsView(selectedSubject ? 'by-subject' : 'list'); 
+      setResultsView('list'); 
     } else if (resultsView === 'by-subject') { 
       setSelectedSubject(null); 
-      setResultsView('list'); 
+      setResultsView('list');
     } else { 
       setActiveTab('dashboard'); 
     }
@@ -765,6 +846,60 @@ const viewResultDetails = async (result: ExamResult) => {
     }
   };
 
+  // ========== دوال إدارة النظام (محاكاة) ==========
+  const openManagementModal = (type: 'admin' | 'student' | 'grade' | 'specialization', entity: any | null = null) => {
+    setEditingEntity(entity);
+    if (type === 'admin') {
+      setEntityForm(entity ? { name: { ar: entity.name, en: '' }, email: entity.email } : { name: { ar: '', en: '' }, email: '', password: '' });
+      setAdminAssignments(entity ? entity.assignments : []);
+      setShowAdminModal(true);
+    } else if (type === 'student') {
+      setEntityForm(entity ? { name: { ar: entity.name, en: '' }, email: entity.email } : { name: { ar: '', en: '' }, email: '', password: '' });
+      setStudentAssignment(entity ? { gradeId: entity.gradeId, specializationId: entity.specializationId } : { gradeId: '', specializationId: '' });
+      setShowStudentModal(true);
+    } else if (type === 'grade') {
+      setEntityForm(entity ? { name: entity.name } : { name: { ar: '', en: '' } });
+      setShowGradeModal(true);
+    } else if (type === 'specialization') {
+      setEntityForm(entity ? { name: entity.name } : { name: { ar: '', en: '' } });
+      setShowSpecializationModal(true);
+    }
+  };
+
+  const handleSaveEntity = (type: 'admin' | 'student' | 'grade' | 'specialization') => {
+    // This is a mock save function. In a real app, you'd call an API.
+    const newEntity = { _id: crypto.randomUUID(), ...entityForm };
+    if (type === 'admin') {
+      // @ts-ignore
+      setAdminUsers(prev => [...prev, { ...newEntity, name: newEntity.name.ar, assignments: adminAssignments, role: 'admin', permissions: { canViewDashboard: true, canManageExams: true, canViewResults: true, canMonitor: true } }]);
+      setShowAdminModal(false);
+    } else if (type === 'student') {
+      // @ts-ignore
+      setStudents(prev => [...prev, { ...newEntity, name: newEntity.name.ar, ...studentAssignment }]);
+      setShowStudentModal(false);
+    } else if (type === 'grade') {
+      // @ts-ignore
+      setGrades(prev => [...prev, newEntity]);
+      setShowGradeModal(false);
+    } else if (type === 'specialization') {
+      // @ts-ignore
+      setSpecializations(prev => [...prev, newEntity]);
+      setShowSpecializationModal(false);
+    }
+    setSuccessMsg(`${type} saved successfully (simulation).`);
+    setTimeout(() => setSuccessMsg(''), 3000);
+  };
+
+  const handleAdminAssignmentChange = (gradeId: string, specializationId: string) => {
+    const existing = adminAssignments.find(a => a.gradeId === gradeId && a.specializationId === specializationId);
+    if (existing) {
+      setAdminAssignments(adminAssignments.filter(a => a.gradeId !== gradeId || a.specializationId !== specializationId));
+    } else {
+      setAdminAssignments([...adminAssignments, { gradeId, specializationId }]);
+    }
+  };
+
+
   // ========== فتح نافذة الامتحان ==========
   const openExamModal = (exam?: Exam) => {
     if (exam) {
@@ -778,7 +913,7 @@ const viewResultDetails = async (result: ExamResult) => {
         status: exam.status,
         settings: exam.settings || examForm.settings,
         description: { ar: '', en: '' }, // تحتاج لجلبها من الباك إند إذا كانت موجودة
-        availability: { assignedTo: 'all', classIds: [] }
+        availability: exam.availability || { assignedTo: 'all', classIds: [], gradeIds: [], specializationIds: [] }
       });
       setQuestions(exam.questions || []);
     } else {
@@ -796,7 +931,7 @@ const viewResultDetails = async (result: ExamResult) => {
           allowReview: true
         },
         status: 'draft',
-        availability: { assignedTo: 'all', classIds: [] }
+        availability: { assignedTo: 'all', classIds: [], gradeIds: [], specializationIds: [] }
       });
       setQuestions([]);
     }
@@ -957,7 +1092,7 @@ const viewResultDetails = async (result: ExamResult) => {
             <h1 className="text-xl font-bold text-gray-900">
               {activeTab === 'dashboard' && (language === 'ar' ? 'لوحة التحكم' : 'Dashboard')}
               {activeTab === 'exams' && (language === 'ar' ? 'إدارة الامتحانات' : 'Manage Exams')}
-              {activeTab === 'results' && (
+              {activeTab === 'results' && !viewingDetails && (
                 resultsView === 'list' ? (language === 'ar' ? 'سجل النتائج' : 'Results') :
                 resultsView === 'by-subject' ? selectedSubject?.name[language === 'ar' ? 'ar' : 'en'] :
                 resultsView === 'by-exam' ? (language === 'ar' ? selectedExam?.title.ar : selectedExam?.title.en) :
@@ -1161,14 +1296,14 @@ const viewResultDetails = async (result: ExamResult) => {
         {/* ========== تبويب النتائج ========== */}
         {activeTab === 'results' && (
           <div className="space-y-6">
-            {isSuperAdmin && resultsView === 'list' && (
+            {isSuperAdmin && (resultsView === 'list' || resultsView === 'by-subject') && (
               <div className="bg-white p-4 rounded-xl shadow-sm border flex flex-wrap items-center gap-4">
                   <label className="font-medium">{language === 'ar' ? 'فلترة حسب:' : 'Filter by:'}</label>
                   <select value={globalFilter.gradeId} onChange={e => setGlobalFilter(f => ({...f, gradeId: e.target.value, specializationId: '', subjectId: ''}))} className="p-2 border rounded-lg">
                       <option value="">{language === 'ar' ? 'كل المراحل' : 'All Grades'}</option>
                       {grades.map(g => <option key={g._id} value={g._id}>{g.name.ar}</option>)}
                   </select>
-                  <select value={globalFilter.specializationId} onChange={e => setGlobalFilter(f => ({...f, specializationId: e.target.value, subjectId: ''}))} className="p-2 border rounded-lg" disabled={!globalFilter.gradeId}>
+                  <select value={globalFilter.specializationId} onChange={e => setGlobalFilter(f => ({...f, specializationId: e.target.value, subjectId: ''}))} className="p-2 border rounded-lg" >
                       <option value="">{language === 'ar' ? 'كل التخصصات' : 'All Specializations'}</option>
                       {specializations.map(s => <option key={s._id} value={s._id}>{s.name.ar}</option>)}
                   </select>
@@ -1183,16 +1318,16 @@ const viewResultDetails = async (result: ExamResult) => {
             )}
 
 
-            {resultsView !== 'list' && (
+            {(resultsView === 'by-subject' || resultsView === 'by-exam') && (
               <div className="flex items-center gap-2 text-sm bg-white rounded-lg p-3 shadow-sm">
-                <button onClick={() => { setResultsView('list'); setSelectedSubject(null); setSelectedExam(null); }} className="text-indigo-600 hover:underline">
+                <button onClick={() => { setResultsView('list'); setSelectedSubject(null); setSelectedExam(null); handleBack(); }} className="text-indigo-600 hover:underline">
                   {language === 'ar' ? 'كل النتائج' : 'All Results'}
                 </button>
                 {selectedSubject && (
                   <>
                     <ChevronRight className="w-4 h-4 text-gray-400" />
-                    <button onClick={() => { setSelectedExam(null); setResultsView('by-subject'); }} className="text-indigo-600 hover:underline">
-                      {language === 'ar' ? selectedSubject.name.ar : selectedSubject.name.en}
+                    <button onClick={() => { setSelectedExam(null); setResultsView('by-subject'); }} className={resultsView === 'by-exam' ? "text-indigo-600 hover:underline" : "text-gray-800 font-medium"}>
+                       {language === 'ar' ? selectedSubject.name.ar : selectedSubject.name.en}
                     </button>
                   </>
                 )}
@@ -1234,7 +1369,7 @@ const viewResultDetails = async (result: ExamResult) => {
                 </button>
               </div>
             </div>
-            {resultsView === 'list' && (
+            {resultsView === 'list' ? (
               <>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
                   {subjects.map(subject => {
@@ -1277,7 +1412,7 @@ const viewResultDetails = async (result: ExamResult) => {
                       </tr>
                     </thead>
                     <tbody className="divide-y">
-                      {results.map(result => (
+                      {filteredResults.map(result => (
                         <tr key={result._id} className="hover:bg-gray-50">
                           <td className="px-4 py-3"><input type="checkbox" checked={selectedIds.has(result._id)} onChange={(e) => { const newSet = new Set(selectedIds); e.target.checked ? newSet.add(result._id) : newSet.delete(result._id); setSelectedIds(newSet); }} className="rounded" /></td>
                           <td className="px-4 py-3"><p className="font-medium">{result.userName}</p><p className="text-sm text-gray-600">{result.userEmail}</p></td>
@@ -1300,8 +1435,7 @@ const viewResultDetails = async (result: ExamResult) => {
                   {results.length === 0 && <div className="p-8 text-center text-gray-600">{language === 'ar' ? 'لا توجد نتائج' : 'No results'}</div>}
                 </div>
               </>
-            )}
-            {resultsView === 'by-subject' && selectedSubject && (
+            ) : resultsView === 'by-subject' && selectedSubject ? (
               <>
                 <h3 className="text-lg font-semibold mb-4">{language === 'ar' ? 'امتحانات هذه المادة' : 'Exams for this Subject'}</h3>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
@@ -1317,9 +1451,42 @@ const viewResultDetails = async (result: ExamResult) => {
                     </button>
                   ))}
                 </div>
+                <h3 className="text-lg font-semibold my-4">{language === 'ar' ? 'نتائج هذه المادة' : 'Results for this Subject'}</h3>
+                <div className="bg-white rounded-xl shadow overflow-hidden">
+                  <table className="w-full">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="px-4 py-3 text-start"><input type="checkbox" checked={selectAll} onChange={() => toggleSelectAll(filteredResults.map(r => r._id))} className="rounded" /></th>
+                        <th className="px-4 py-3 text-start">{language === 'ar' ? 'الطالب' : 'Student'}</th>
+                        <th className="px-4 py-3 text-start">{language === 'ar' ? 'الامتحان' : 'Exam'}</th>
+                        <th className="px-4 py-3 text-start">{language === 'ar' ? 'الدرجة' : 'Score'}</th>
+                        <th className="px-4 py-3 text-start hidden sm:table-cell">{language === 'ar' ? 'التاريخ' : 'Date'}</th>
+                        <th className="px-4 py-3 text-start">{language === 'ar' ? 'الحالة' : 'Status'}</th>
+                        <th className="px-4 py-3 text-start">{language === 'ar' ? 'إجراءات' : 'Actions'}</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y">
+                      {filteredResults.map(result => (
+                        <tr key={result._id} className="hover:bg-gray-50">
+                          <td className="px-4 py-3"><input type="checkbox" checked={selectedIds.has(result._id)} onChange={(e) => { const newSet = new Set(selectedIds); e.target.checked ? newSet.add(result._id) : newSet.delete(result._id); setSelectedIds(newSet); }} className="rounded" /></td>
+                          <td className="px-4 py-3"><p className="font-medium">{result.userName}</p><p className="text-sm text-gray-600">{result.userEmail}</p></td>
+                          <td className="px-4 py-3 text-gray-800">{exams.find(e => e._id === result.examId)?.title[language === 'ar' ? 'ar' : 'en']}</td>
+                          <td className="px-4 py-3"><span className={`px-3 py-1 rounded-full text-sm font-bold ${getScoreColor(result.score)}`}>{result.score}%</span></td>
+                          <td className="px-4 py-3 text-gray-700 hidden sm:table-cell">{formatDate(result.submittedAt)}</td>
+                          <td className="px-4 py-3">{getStatusBadge('', result.isReviewed)}</td>
+                          <td className="px-4 py-3">
+                            <div className="flex gap-1">
+                              <button onClick={() => { setResultsView('student-details'); viewResultDetails(result); }} className="p-2 hover:bg-blue-50 text-blue-600 rounded"><Eye className="w-4 h-4" /></button>
+                              <button onClick={() => handleDelete('result', result._id)} className="p-2 hover:bg-red-50 text-red-600 rounded"><Trash2 className="w-4 h-4" /></button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </>
-            )}
-            {resultsView === 'by-exam' && selectedExam && (
+            ) : resultsView === 'by-exam' && selectedExam ? (
               <>
                 <div className="bg-white rounded-xl shadow p-4 mb-4">
                   <div className="flex justify-between items-start">
@@ -1348,7 +1515,7 @@ const viewResultDetails = async (result: ExamResult) => {
                       </tr>
                     </thead>
                     <tbody className="divide-y">
-                      {results.map(result => (
+                      {filteredResults.map(result => (
                         <tr key={result._id} className="hover:bg-gray-50">
                           <td className="px-4 py-3"><input type="checkbox" checked={selectedIds.has(result._id)} onChange={(e) => { const newSet = new Set(selectedIds); e.target.checked ? newSet.add(result._id) : newSet.delete(result._id); setSelectedIds(newSet); }} className="rounded" /></td>
                           <td className="px-4 py-3"><p className="font-medium">{result.userName}</p><p className="text-sm text-gray-600">{result.userEmail}</p></td>
@@ -1369,7 +1536,7 @@ const viewResultDetails = async (result: ExamResult) => {
                   {results.length === 0 && <div className="p-8 text-center text-gray-600">{language === 'ar' ? 'لا توجد نتائج لهذا الامتحان' : 'No results for this exam'}</div>}
                 </div>
               </>
-            )}
+            ) : null}
           </div>
         )}
 
@@ -1379,18 +1546,35 @@ const viewResultDetails = async (result: ExamResult) => {
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-lg font-semibold">{language === 'ar' ? 'إدارة المواد' : 'Manage Subjects'}</h2>
               <button 
-                onClick={() => { setEditingSubject(null); setSubjectForm({ name: { ar: '', en: '' }, code: '', description: { ar: '', en: '' } }); setShowSubjectModal(true); }}
+                onClick={() => { openManagementModal('specialization') }}
                 className="flex items-center gap-2 px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm"
               >
                 <Plus className="w-4 h-4" /> {language === 'ar' ? 'إضافة مادة' : 'Add Subject'}
               </button>
+            </div>
+            <div className="p-4 border-y flex flex-wrap items-center gap-4">
+                <label className="font-medium">{language === 'ar' ? 'فلترة حسب:' : 'Filter by:'}</label>
+                <select value={globalFilter.gradeId} onChange={e => setGlobalFilter(f => ({...f, gradeId: e.target.value, specializationId: '', subjectId: ''}))} className="p-2 border rounded-lg">
+                    <option value="">{language === 'ar' ? 'كل المراحل' : 'All Grades'}</option>
+                    {grades.map(g => <option key={g._id} value={g._id}>{g.name.ar}</option>)}
+                </select>
+                <select value={globalFilter.specializationId} onChange={e => setGlobalFilter(f => ({...f, specializationId: e.target.value, subjectId: ''}))} className="p-2 border rounded-lg">
+                    <option value="">{language === 'ar' ? 'كل التخصصات' : 'All Specializations'}</option>
+                    {specializations.map(s => <option key={s._id} value={s._id}>{s.name.ar}</option>)}
+                </select>
+                <button onClick={() => setGlobalFilter({gradeId: '', specializationId: '', subjectId: ''})} className="text-sm text-gray-600 hover:underline">
+                  {language === 'ar' ? 'إعادة تعيين' : 'Reset'}
+                </button>
+            </div>
+            <div className="flex justify-between items-center p-4">
+              <div className="flex items-center gap-2"><input type="checkbox" checked={selectAll} onChange={() => toggleSelectAll(subjects.map(s => s._id))} /> <span>{language === 'ar' ? 'تحديد الكل' : 'Select All'}</span></div>
               {selectedIds.size > 0 && (
                 <button onClick={() => handleBulkDelete('subject')} className="flex items-center gap-2 px-3 py-2 bg-red-600 hover:bg-red-700 text-white rounded text-sm">
                   <Trash2 className="w-4 h-4" /> {language === 'ar' ? `حذف (${selectedIds.size})` : `Delete (${selectedIds.size})`}
                 </button>
               )}
             </div>
-            <div className="space-y-3">
+            <div className="space-y-3 max-h-96 overflow-y-auto">
               {subjects.map(subject => (
                 <div key={subject._id} className="flex justify-between items-center p-4 border rounded-lg hover:bg-gray-50">
                   <div className="flex items-center gap-3">
@@ -1401,7 +1585,7 @@ const viewResultDetails = async (result: ExamResult) => {
                     </div>
                   </div>
                   <div className="flex gap-2">
-                    <button onClick={() => { setEditingSubject(subject); setSubjectForm({ name: subject.name, code: subject.code || '', description: { ar: '', en: '' } }); setShowSubjectModal(true); }} className="p-2 hover:bg-indigo-50 text-indigo-600 rounded"><Edit className="w-4 h-4" /></button>
+                    <button onClick={() => openManagementModal('specialization', subject)} className="p-2 hover:bg-indigo-50 text-indigo-600 rounded"><Edit className="w-4 h-4" /></button>
                     <button onClick={() => handleDelete('subject', subject._id)} className="p-2 hover:bg-red-50 text-red-600 rounded"><Trash2 className="w-4 h-4" /></button>
                   </div>
                 </div>
@@ -1424,9 +1608,13 @@ const viewResultDetails = async (result: ExamResult) => {
                     <option value="">{language === 'ar' ? 'اختر التخصص' : 'Select Specialization'}</option>
                     {specializations.map(s => <option key={s._id} value={s._id}>{s.name.ar}</option>)}
                 </select>
-                <select onChange={(e) => setSelectedExam(exams.find(ex => ex._id === e.target.value) || null)} className="p-2 border rounded-lg" disabled={!globalFilter.specializationId}>
+                <select value={globalFilter.subjectId} onChange={e => setGlobalFilter(f => ({...f, subjectId: e.target.value}))} className="p-2 border rounded-lg" disabled={!globalFilter.specializationId}>
+                    <option value="">{language === 'ar' ? 'اختر المادة' : 'Select Subject'}</option>
+                    {subjects.map(s => <option key={s._id} value={s._id}>{s.name.ar}</option>)}
+                </select>
+                <select onChange={(e) => setSelectedExam(exams.find(ex => ex._id === e.target.value) || null)} className="p-2 border rounded-lg" disabled={!globalFilter.subjectId}>
                     <option value="">{language === 'ar' ? 'اختر الامتحان' : 'Select Exam'}</option>
-                    {exams.filter(e => e.subjectId === subjects[0]?._id).map(exam => <option key={exam._id} value={exam._id}>{exam.title.ar}</option>)}
+                    {exams.filter(e => e.subjectId === globalFilter.subjectId).map(exam => <option key={exam._id} value={exam._id}>{exam.title.ar}</option>)}
                 </select>
             </div>
             {/* Show Commander if an exam is selected or active */}
@@ -1448,7 +1636,7 @@ const viewResultDetails = async (result: ExamResult) => {
             <div className="lg:col-span-2 bg-white rounded-xl shadow p-6">
               <div className="flex justify-between items-center mb-4">
                 <h3 className="font-bold text-lg flex items-center gap-2"><Users /> {language === 'ar' ? 'إدارة المعلمين' : 'Manage Teachers'}</h3>
-                <button className="flex items-center gap-2 px-3 py-2 bg-indigo-600 text-white rounded-lg text-sm"><UserPlus className="w-4 h-4" /> {language === 'ar' ? 'إضافة معلم' : 'Add Teacher'}</button>
+                <button onClick={() => openManagementModal('admin')} className="flex items-center gap-2 px-3 py-2 bg-indigo-600 text-white rounded-lg text-sm"><UserPlus className="w-4 h-4" /> {language === 'ar' ? 'إضافة معلم' : 'Add Teacher'}</button>
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
@@ -1461,7 +1649,7 @@ const viewResultDetails = async (result: ExamResult) => {
             <div className="lg:col-span-2 bg-white rounded-xl shadow p-6">
               <div className="flex justify-between items-center mb-4">
                 <h3 className="font-bold text-lg flex items-center gap-2"><GraduationCap /> {language === 'ar' ? 'إدارة الطلاب' : 'Manage Students'}</h3>
-                <button className="flex items-center gap-2 px-3 py-2 bg-indigo-600 text-white rounded-lg text-sm"><UserPlus className="w-4 h-4" /> {language === 'ar' ? 'إضافة طالب' : 'Add Student'}</button>
+                <button onClick={() => openManagementModal('student')} className="flex items-center gap-2 px-3 py-2 bg-indigo-600 text-white rounded-lg text-sm"><UserPlus className="w-4 h-4" /> {language === 'ar' ? 'إضافة طالب' : 'Add Student'}</button>
               </div>
                <div className="overflow-x-auto">
                 <table className="w-full text-sm">
@@ -1475,14 +1663,14 @@ const viewResultDetails = async (result: ExamResult) => {
               <div className="bg-white rounded-xl shadow p-6">
                 <div className="flex justify-between items-center mb-4">
                   <h3 className="font-bold text-lg flex items-center gap-2"><Briefcase /> {language === 'ar' ? 'التخصصات' : 'Specializations'}</h3>
-                  <button className="p-2 bg-gray-100 rounded-lg"><Plus className="w-4 h-4" /></button>
+                  <button onClick={() => openManagementModal('specialization')} className="p-2 bg-gray-100 rounded-lg"><Plus className="w-4 h-4" /></button>
                 </div>
                 <ul className="space-y-2">{specializations.map(s => <li key={s._id} className="p-2 bg-gray-50 rounded">{s.name.ar}</li>)}</ul>
               </div>
               <div className="bg-white rounded-xl shadow p-6">
                 <div className="flex justify-between items-center mb-4">
                   <h3 className="font-bold text-lg flex items-center gap-2"><Calendar /> {language === 'ar' ? 'المراحل' : 'Grades'}</h3>
-                  <button className="p-2 bg-gray-100 rounded-lg"><Plus className="w-4 h-4" /></button>
+                  <button onClick={() => openManagementModal('grade')} className="p-2 bg-gray-100 rounded-lg"><Plus className="w-4 h-4" /></button>
                 </div>
                 <ul className="space-y-2">{grades.map(g => <li key={g._id} className="p-2 bg-gray-50 rounded">{g.name.ar}</li>)}</ul>
               </div>
@@ -1588,7 +1776,7 @@ const viewResultDetails = async (result: ExamResult) => {
                     </div>
                   </div>
                   <div className="p-4 bg-white border-t">
-                    <ReactQuill theme="snow" value={replyText} onChange={setReplyText} modules={quillModules} className="mb-4 h-24" />
+                    <ReactQuill ref={replyQuillRef} theme="snow" value={replyText} onChange={setReplyText} modules={replyModules} className="mb-4 h-24" />
                     <div className="flex justify-end mt-8">
                       <button className="px-4 py-2 bg-indigo-600 text-white rounded-lg flex items-center gap-2">
                         <Send className="w-4 h-4" /> {language === 'ar' ? 'إرسال' : 'Send'}
@@ -1601,20 +1789,30 @@ const viewResultDetails = async (result: ExamResult) => {
               <div className="space-y-6">
                 <div>
                   <label className="block font-medium mb-2">{language === 'ar' ? 'إرسال إلى' : 'Send To'}</label>
-                  <div className="flex gap-4">
-                    <select className="p-2 border rounded-lg">
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <select className="p-2 border rounded-lg" defaultValue="all">
+                      <option value="all">{language === 'ar' ? 'كل الأنواع' : 'All Types'}</option>
+                      <option value="students">{language === 'ar' ? 'الطلاب' : 'Students'}</option>
+                      <option value="admins">{language === 'ar' ? 'المعلمين' : 'Teachers'}</option>
+                    </select>
+                    <select className="p-2 border rounded-lg" defaultValue="all">
                       <option value="all">{language === 'ar' ? 'الكل' : 'All'}</option>
                       {grades.map(g => <option key={g._id} value={g._id}>{g.name.ar}</option>)}
                     </select>
-                     <select className="p-2 border rounded-lg">
+                     <select className="p-2 border rounded-lg" defaultValue="all">
                       <option value="all">{language === 'ar' ? 'كل التخصصات' : 'All Specializations'}</option>
                       {specializations.map(s => <option key={s._id} value={s._id}>{s.name.ar}</option>)}
+                    </select>
+                    <select className="p-2 border rounded-lg" defaultValue="all">
+                      <option value="all">{language === 'ar' ? 'كل المستخدمين' : 'All Users'}</option>
+                      {/* This would be populated based on other filters */}
                     </select>
                   </div>
                 </div>
                 <div>
                   <label className="block font-medium mb-2 mt-4">{language === 'ar' ? 'نص التعميم' : 'Announcement Text'}</label>
-                  <ReactQuill theme="snow" value={announcementText} onChange={setAnnouncementText} modules={quillModules} className="h-40 mb-12" />
+                  <p className="text-xs text-gray-500 mb-2">{language === 'ar' ? 'يمكنك إرفاق صور مباشرة في المحرر.' : 'You can attach images directly in the editor.'}</p>
+                  <ReactQuill ref={announcementQuillRef} theme="snow" value={announcementText} onChange={setAnnouncementText} modules={announcementModules} className="h-40 mb-12" />
                 </div>
                 <div className="flex justify-end">
                   <button className="px-6 py-2 bg-indigo-600 text-white rounded-lg flex items-center gap-2">
@@ -1761,7 +1959,7 @@ const viewResultDetails = async (result: ExamResult) => {
                               <div className="max-h-32 overflow-y-auto border rounded bg-white p-2">
                                 {grades.map(g => (
                                   <label key={g._id} className="flex items-center gap-2 mb-1">
-                                    <input type="checkbox" checked={examForm.availability.gradeIds?.includes(g._id)} onChange={e => {
+                                    <input type="checkbox" checked={examForm.availability.gradeIds?.includes(g._id) || false} onChange={e => {
                                       const current = examForm.availability.gradeIds || [];
                                       const updated = e.target.checked ? [...current, g._id] : current.filter((id: string) => id !== g._id);
                                       setExamForm({...examForm, availability: {...examForm.availability, gradeIds: updated}});
@@ -1776,7 +1974,7 @@ const viewResultDetails = async (result: ExamResult) => {
                               <div className="max-h-32 overflow-y-auto border rounded bg-white p-2">
                                 {specializations.map(s => (
                                   <label key={s._id} className="flex items-center gap-2 mb-1">
-                                    <input type="checkbox" checked={examForm.availability.specializationIds?.includes(s._id)} onChange={e => {
+                                    <input type="checkbox" checked={examForm.availability.specializationIds?.includes(s._id) || false} onChange={e => {
                                       const current = examForm.availability.specializationIds || [];
                                       const updated = e.target.checked ? [...current, s._id] : current.filter((id: string) => id !== s._id);
                                       setExamForm({...examForm, availability: {...examForm.availability, specializationIds: updated}});
@@ -1810,8 +2008,8 @@ const viewResultDetails = async (result: ExamResult) => {
                               <span className="text-xs font-bold bg-gray-200 px-2 py-1 rounded mr-2">{q.type}</span>
                               <span className="font-bold">{language === 'ar' ? `سؤال ${idx + 1}` : `Q ${idx + 1}`}</span>
                             </div>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-                              <ReactQuill ref={(el: any) => { if(el) (window as any).quillRef = el }} modules={quillModules} value={q.text.ar} onChange={(val: string) => updateQuestion(q.id, { text: { ...q.text, ar: val } })} placeholder="Question (AR)" className="bg-white h-24 mb-10" />
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4" ref={questionQuillRef}>
+                              <ReactQuill modules={quillModules} value={q.text.ar} onChange={(val: string) => updateQuestion(q.id, { text: { ...q.text, ar: val } })} placeholder="Question (AR)" className="bg-white h-24 mb-10" />
                               <ReactQuill modules={quillModules} value={q.text.en} onChange={(val: string) => updateQuestion(q.id, { text: { ...q.text, en: val } })} placeholder="Question (EN)" className="bg-white h-24 mb-10" />
                             </div>
                             
@@ -1936,6 +2134,78 @@ const viewResultDetails = async (result: ExamResult) => {
                 <button type="submit" className="w-full bg-indigo-600 text-white py-2 rounded font-bold hover:bg-indigo-700">
                   {language === 'ar' ? 'حفظ' : 'Save'}
                 </button>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* ========== نوافذ إدارة النظام (Modals) ========== */}
+        {showAdminModal && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto p-6">
+              <h2 className="text-xl font-bold mb-4">{language === 'ar' ? 'إضافة/تعديل معلم' : 'Add/Edit Teacher'}</h2>
+              <form onSubmit={(e) => { e.preventDefault(); handleSaveEntity('admin'); }} className="space-y-4">
+                <input type="text" placeholder={language === 'ar' ? 'الاسم' : 'Name'} required value={entityForm.name.ar} onChange={e => setEntityForm({...entityForm, name: { ar: e.target.value, en: e.target.value }})} className="w-full border p-2 rounded" />
+                <input type="email" placeholder={language === 'ar' ? 'البريد الإلكتروني' : 'Email'} required value={entityForm.email || ''} onChange={e => setEntityForm({...entityForm, email: e.target.value})} className="w-full border p-2 rounded" />
+                <input type="password" placeholder={language === 'ar' ? 'كلمة المرور' : 'Password'} required={!editingEntity} className="w-full border p-2 rounded" />
+                <h3 className="font-bold pt-4 border-t">{language === 'ar' ? 'تخصيص الفصول' : 'Assign Classes'}</h3>
+                <div className="grid grid-cols-2 gap-4 max-h-64 overflow-y-auto border p-2 rounded-lg">
+                  {grades.map(g => (
+                    <div key={g._id}>
+                      <h4 className="font-semibold text-sm mb-1">{g.name.ar}</h4>
+                      {specializations.map(s => (
+                        <label key={s._id} className="flex items-center gap-2 text-xs ml-2">
+                          <input type="checkbox" 
+                            checked={adminAssignments.some(a => a.gradeId === g._id && a.specializationId === s._id)}
+                            onChange={() => handleAdminAssignmentChange(g._id, s._id)}
+                          />
+                          {s.name.ar}
+                        </label>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+                <button type="submit" className="w-full bg-indigo-600 text-white py-2 rounded font-bold">{language === 'ar' ? 'حفظ' : 'Save'}</button>
+              </form>
+            </div>
+          </div>
+        )}
+        {showStudentModal && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg p-6">
+              <h2 className="text-xl font-bold mb-4">{language === 'ar' ? 'إضافة/تعديل طالب' : 'Add/Edit Student'}</h2>
+              <form onSubmit={(e) => { e.preventDefault(); handleSaveEntity('student'); }} className="space-y-4">
+                <input type="text" placeholder={language === 'ar' ? 'الاسم' : 'Name'} required value={entityForm.name.ar} onChange={e => setEntityForm({...entityForm, name: { ar: e.target.value, en: e.target.value }})} className="w-full border p-2 rounded" />
+                <input type="email" placeholder={language === 'ar' ? 'البريد الإلكتروني' : 'Email'} required value={entityForm.email || ''} onChange={e => setEntityForm({...entityForm, email: e.target.value})} className="w-full border p-2 rounded" />
+                <input type="password" placeholder={language === 'ar' ? 'كلمة المرور' : 'Password'} required={!editingEntity} className="w-full border p-2 rounded" />
+                <select value={studentAssignment.gradeId} onChange={e => setStudentAssignment({...studentAssignment, gradeId: e.target.value})} className="w-full border p-2 rounded">
+                  <option value="">{language === 'ar' ? 'اختر المرحلة' : 'Select Grade'}</option>
+                  {grades.map(g => <option key={g._id} value={g._id}>{g.name.ar}</option>)}
+                </select>
+                <select value={studentAssignment.specializationId} onChange={e => setStudentAssignment({...studentAssignment, specializationId: e.target.value})} className="w-full border p-2 rounded">
+                  <option value="">{language === 'ar' ? 'اختر التخصص' : 'Select Specialization'}</option>
+                  {specializations.map(s => <option key={s._id} value={s._id}>{s.name.ar}</option>)}
+                </select>
+                <button type="submit" className="w-full bg-indigo-600 text-white py-2 rounded font-bold">{language === 'ar' ? 'حفظ' : 'Save'}</button>
+              </form>
+            </div>
+          </div>
+        )}
+        {(showGradeModal || showSpecializationModal) && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6">
+              <h2 className="text-xl font-bold mb-4">
+                {showGradeModal 
+                  ? (language === 'ar' ? 'إضافة مرحلة' : 'Add Grade') 
+                  : (language === 'ar' ? 'إضافة تخصص' : 'Add Specialization')}
+              </h2>
+              <form onSubmit={(e) => { e.preventDefault(); handleSaveEntity(showGradeModal ? 'grade' : 'specialization'); }} className="space-y-4">
+                <input type="text" placeholder={language === 'ar' ? 'الاسم (عربي)' : 'Name (AR)'} required value={entityForm.name.ar} onChange={e => setEntityForm({name: {...entityForm.name, ar: e.target.value}})} className="w-full border p-2 rounded" />
+                <input type="text" placeholder={language === 'ar' ? 'الاسم (إنجليزي)' : 'Name (EN)'} required value={entityForm.name.en} onChange={e => setEntityForm({name: {...entityForm.name, en: e.target.value}})} className="w-full border p-2 rounded" />
+                <div className="flex gap-2">
+                  <button type="button" onClick={() => { setShowGradeModal(false); setShowSpecializationModal(false); }} className="flex-1 py-2 bg-gray-200 rounded-lg">{language === 'ar' ? 'إلغاء' : 'Cancel'}</button>
+                  <button type="submit" className="flex-1 bg-indigo-600 text-white py-2 rounded font-bold">{language === 'ar' ? 'حفظ' : 'Save'}</button>
+                </div>
               </form>
             </div>
           </div>
