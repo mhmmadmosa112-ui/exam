@@ -3,6 +3,10 @@ import { adminAuth, adminDb } from '@/lib/firebase-admin';
 
 // This function will handle creating both Admins (teachers) and Students
 export async function POST(req: Request) {
+  if (!adminAuth || !adminDb) {
+    return NextResponse.json({ success: false, error: 'Server Error: Firebase Admin not initialized. Check .env.local and restart server.' }, { status: 500 });
+  }
+
   try {
     const body = await req.json();
     const {
@@ -12,8 +16,6 @@ export async function POST(req: Request) {
       name,
       role, // 'admin' or 'student'
       permissions, // for admins
-      nationalId, // for admins
-      phone, // for admins
       assignments, // for admins
       studentAssignment // for students
     } = body;
@@ -63,8 +65,6 @@ export async function POST(req: Request) {
       if (role === 'admin') {
         userData.permissions = permissions || {};
         userData.assignments = assignments || [];
-        userData.nationalId = nationalId || '';
-        userData.phone = phone || '';
       } else if (role === 'student') {
         userData.gradeId = studentAssignment?.gradeId || '';
         userData.specializationId = studentAssignment?.specializationId || '';
@@ -84,7 +84,7 @@ export async function POST(req: Request) {
         role,
         provisionedBy: 'admin',
         createdAt: new Date().toISOString(),
-        ...(role === 'admin' && { permissions, assignments, nationalId, phone }),
+        ...(role === 'admin' && { permissions, assignments }),
         ...(role === 'student' && { gradeId: studentAssignment?.gradeId, specializationId: studentAssignment?.specializationId }),
       };
 
