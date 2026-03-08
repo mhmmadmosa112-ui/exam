@@ -14,7 +14,12 @@ export async function POST(req: Request) {
       return NextResponse.json({ success: false, error: `خطأ في الإعدادات: المتغيرات التالية مفقودة: ${missingVars.join(', ')}. تأكد من ملف .env.local وأعد تشغيل السيرفر.` }, { status: 500 });
     }
 
-    return NextResponse.json({ success: false, error: 'خطأ في السيرفر: فشل تهيئة Firebase Admin. راجع سجلات التيرمينال للتفاصيل.' }, { status: 500 });
+    let errorMsg = 'خطأ في السيرفر: فشل تهيئة Firebase Admin.';
+    if (!adminAuth) errorMsg += ' (Auth failed)';
+    if (!adminDb) errorMsg += ' (Firestore failed)';
+    errorMsg += ' راجع سجلات التيرمينال للتفاصيل.';
+
+    return NextResponse.json({ success: false, error: errorMsg }, { status: 500 });
   }
 
   try {

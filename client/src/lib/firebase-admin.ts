@@ -20,29 +20,41 @@ try {
     }
 
     if (projectId && clientEmail && privateKey) {
-      admin.initializeApp({
-        credential: admin.credential.cert({
-          projectId,
-          clientEmail,
-          privateKey,
-        }),
-      });
-      console.log("✅ [Server] Firebase Admin initialized successfully");
+      try {
+        admin.initializeApp({
+          credential: admin.credential.cert({
+            projectId,
+            clientEmail,
+            privateKey,
+          }),
+        });
+        console.log("✅ [Server] Firebase Admin initialized successfully");
+      } catch (e) {
+        console.error("❌ [Server] Failed to initializeApp:", e);
+      }
     } else {
       console.warn("⚠️ [Server] Firebase Admin variables are missing in .env.local");
     }
   }
 
-  if (admin.apps.length > 0 && !adminAuth) {
-    adminAuth = admin.auth();
-    adminDb = admin.firestore();
+  if (admin.apps.length > 0) {
+    try {
+      if (!adminAuth) adminAuth = admin.auth();
+    } catch (e) {
+      console.error("❌ [Server] Failed to initialize Auth:", e);
+    }
+
+    try {
+      if (!adminDb) adminDb = admin.firestore();
+    } catch (e: any) {
+      console.error("❌ [Server] Failed to initialize Firestore:", e);
+      if (e.code === 'MODULE_NOT_FOUND' || e.message?.includes('Cannot find module')) {
+        console.error('👉 Solution: npm install @opentelemetry/api');
+      }
+    }
   }
 } catch (error: any) {
   console.error('❌ [Server] Firebase admin initialization error:', error);
-  // إذا كان الخطأ بسبب المكتبة المفقودة، نوضح الحل للمستخدم
-  if (error.code === 'MODULE_NOT_FOUND' || error.message?.includes('Cannot find module')) {
-    console.error('👉 الحل: قم بتشغيل الأمر التالي في التيرمينال: npm install @opentelemetry/api');
-  }
 }
 
 export { adminAuth, adminDb };
